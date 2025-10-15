@@ -403,6 +403,14 @@ const app = new Elysia()
         attachments: typeof account.attachments === "string"
           ? account.attachments
           : JSON.stringify(account.attachments ?? {}),
+        leftHand: account.leftHand !== undefined 
+          ? (typeof account.leftHand === "string" ? account.leftHand : JSON.stringify(account.leftHand))
+          : undefined,
+        rightHand: account.rightHand !== undefined
+          ? (typeof account.rightHand === "string" ? account.rightHand : JSON.stringify(account.rightHand))
+          : undefined,
+        leftHandColor: account.leftHandColor,
+        rightHandColor: account.rightHandColor,
         isSoftBanned: false,
         showFlagWarning: false,
         flagTags: [],
@@ -429,7 +437,7 @@ const app = new Elysia()
   )
   // Save avatar body attachments to account.json
   .post("/person/updateattachment", async ({ body }) => {
-    const { id, data, attachments } = body as any;
+    const { id, data, attachments, leftHand, rightHand } = body as any;
 
     const accountPath = "./data/person/account.json";
     let accountData: Record<string, any> = {};
@@ -450,6 +458,35 @@ const app = new Elysia()
       currentAttachments = accountData.attachments as Record<string, any>;
     }
 
+    // Handle hand attachments separately
+    if (leftHand !== undefined) {
+      let parsedLeftHand: any = leftHand;
+      if (typeof leftHand === "string") {
+        try { parsedLeftHand = JSON.parse(leftHand); } catch {
+          return new Response(JSON.stringify({ ok: false, error: "leftHand must be JSON string" }), {
+            status: 422,
+            headers: { "Content-Type": "application/json" }
+          });
+        }
+      }
+      accountData.leftHand = parsedLeftHand;
+      console.log("[ATTACHMENT] Updated left hand:", parsedLeftHand);
+    }
+
+    if (rightHand !== undefined) {
+      let parsedRightHand: any = rightHand;
+      if (typeof rightHand === "string") {
+        try { parsedRightHand = JSON.parse(rightHand); } catch {
+          return new Response(JSON.stringify({ ok: false, error: "rightHand must be JSON string" }), {
+            status: 422,
+            headers: { "Content-Type": "application/json" }
+          });
+        }
+      }
+      accountData.rightHand = parsedRightHand;
+      console.log("[ATTACHMENT] Updated right hand:", parsedRightHand);
+    }
+
     if (attachments !== undefined) {
       // Full replacement path
       let parsed: unknown = attachments;
@@ -462,6 +499,7 @@ const app = new Elysia()
         }
       }
       accountData.attachments = parsed;
+      console.log("[ATTACHMENT] Updated full attachments");
     } else if (id !== undefined && data !== undefined) {
       // Incremental update path: single slot
       let parsedData: any = data;
@@ -473,10 +511,22 @@ const app = new Elysia()
           });
         }
       }
-      currentAttachments[String(id)] = parsedData;
-      accountData.attachments = currentAttachments;
-    } else {
-      return new Response(JSON.stringify({ ok: false, error: "Missing attachments or (id,data)" }), {
+      
+      // Check if this is a hand slot (typically slots like "leftHand" or "rightHand")
+      const slotId = String(id);
+      if (slotId === "leftHand" || slotId === "LeftHand") {
+        accountData.leftHand = parsedData;
+        console.log("[ATTACHMENT] Updated left hand via id/data:", parsedData);
+      } else if (slotId === "rightHand" || slotId === "RightHand") {
+        accountData.rightHand = parsedData;
+        console.log("[ATTACHMENT] Updated right hand via id/data:", parsedData);
+      } else {
+        currentAttachments[slotId] = parsedData;
+        accountData.attachments = currentAttachments;
+        console.log(`[ATTACHMENT] Updated attachment slot ${slotId}`);
+      }
+    } else if (leftHand === undefined && rightHand === undefined) {
+      return new Response(JSON.stringify({ ok: false, error: "Missing attachments, (id,data), or hand data" }), {
         status: 422,
         headers: { "Content-Type": "application/json" }
       });
@@ -493,8 +543,91 @@ const app = new Elysia()
       t.Object({
         attachments: t.Union([t.String(), t.Record(t.String(), t.Any())])
       }),
-      t.Object({ id: t.Union([t.String(), t.Number()]), data: t.String() })
+      t.Object({ id: t.Union([t.String(), t.Number()]), data: t.String() }),
+      t.Object({ 
+        leftHand: t.Optional(t.Union([t.String(), t.Any()])),
+        rightHand: t.Optional(t.Union([t.String(), t.Any()]))
+      })
     ])
+  })
+  // Set hand color for avatar
+  .post("/person/sethandcolor", async ({ body }) => {
+    const { leftHandColor, rightHandColor, handColor } = body as any;
+
+    const accountPath = "./data/person/account.json";
+    let accountData: Record<string, any> = {};
+    try {
+      accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
+    } catch {
+      return new Response(JSON.stringify({ ok: false, error: "Account not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    // Handle hand color (can be a single color for both hands or separate colors)
+    if (handColor !== undefined) {
+      // Parse color if it's a string
+      let parsedColor = handColor;
+      if (typeof handColor === "string") {
+        try {
+          parsedColor = JSON.parse(handColor);
+        } catch {
+          // Might be a color string like "255,255,255" or "#ffffff"
+          parsedColor = handColor;
+        }
+      }
+      accountData.leftHandColor = parsedColor;
+      accountData.rightHandColor = parsedColor;
+      console.log("[HAND COLOR] Set both hands to:", parsedColor);
+    }
+
+    // Handle individual hand colors
+    if (leftHandColor !== undefined) {
+      let parsedColor = leftHandColor;
+      if (typeof leftHandColor === "string") {
+        try {
+          parsedColor = JSON.parse(leftHandColor);
+        } catch {
+          parsedColor = leftHandColor;
+        }
+      }
+      accountData.leftHandColor = parsedColor;
+      console.log("[HAND COLOR] Set left hand to:", parsedColor);
+    }
+
+    if (rightHandColor !== undefined) {
+      let parsedColor = rightHandColor;
+      if (typeof rightHandColor === "string") {
+        try {
+          parsedColor = JSON.parse(rightHandColor);
+        } catch {
+          parsedColor = rightHandColor;
+        }
+      }
+      accountData.rightHandColor = parsedColor;
+      console.log("[HAND COLOR] Set right hand to:", parsedColor);
+    }
+
+    if (handColor === undefined && leftHandColor === undefined && rightHandColor === undefined) {
+      return new Response(JSON.stringify({ ok: false, error: "Missing handColor, leftHandColor, or rightHandColor" }), {
+        status: 422,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    await fs.writeFile(accountPath, JSON.stringify(accountData, null, 2));
+
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  }, {
+    body: t.Object({
+      handColor: t.Optional(t.Union([t.String(), t.Any()])),
+      leftHandColor: t.Optional(t.Union([t.String(), t.Any()])),
+      rightHandColor: t.Optional(t.Union([t.String(), t.Any()]))
+    })
   })
   .post("/p", () => ({ "vMaj": 188, "vMinSrv": 1 }))
   .post(
