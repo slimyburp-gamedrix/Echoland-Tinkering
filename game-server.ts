@@ -520,22 +520,48 @@ const app = new Elysia()
           console.log(`[WRIST] Raw parsed data:`, JSON.stringify(parsedData, null, 2));
           console.log(`[WRIST] Parsed data keys:`, Object.keys(parsedData || {}));
           
-          // For now, let's just store ANY wrist attachment as a hand replacement for testing
-          // This will help us see if the basic mechanism works
+          // Store wrist attachment as hand replacement by fetching the thing definition
           if (parsedData && typeof parsedData === 'object' && parsedData.Tid) {
-            console.log(`[HAND REPLACEMENT] TESTING: Storing wrist attachment as hand replacement`);
+            console.log(`[HAND REPLACEMENT] Fetching thing definition for hand replacement`);
             
             if (!accountData.handReplacements) {
               accountData.handReplacements = {};
             }
             
-            // Store the attachment data as hand replacement for testing
-            if (slotId === "6") {
-              accountData.handReplacements.leftHand = parsedData;
-              console.log(`[HAND REPLACEMENT] TESTING: Set left hand replacement via left wrist (slot 6)`);
-            } else if (slotId === "7") {
-              accountData.handReplacements.rightHand = parsedData;
-              console.log(`[HAND REPLACEMENT] TESTING: Set right hand replacement via right wrist (slot 7)`);
+            // Try to fetch the thing definition
+            try {
+              const thingDefPath = `./data/thing/def/${parsedData.Tid}.json`;
+              const fileExists = await fs.access(thingDefPath).then(() => true).catch(() => false);
+              
+              if (fileExists) {
+                const thingDef = JSON.parse(await fs.readFile(thingDefPath, "utf-8"));
+                console.log(`[HAND REPLACEMENT] Fetched thing definition for ${parsedData.Tid}`);
+                
+                // Store the thing definition as hand replacement
+                if (slotId === "6") {
+                  accountData.handReplacements.leftHand = thingDef;
+                  console.log(`[HAND REPLACEMENT] Set left hand replacement via left wrist (slot 6)`);
+                } else if (slotId === "7") {
+                  accountData.handReplacements.rightHand = thingDef;
+                  console.log(`[HAND REPLACEMENT] Set right hand replacement via right wrist (slot 7)`);
+                }
+              } else {
+                console.log(`[HAND REPLACEMENT] Thing definition not found for ${parsedData.Tid}, storing attachment data as fallback`);
+                // Fallback to storing attachment data if thing definition doesn't exist
+                if (slotId === "6") {
+                  accountData.handReplacements.leftHand = parsedData;
+                } else if (slotId === "7") {
+                  accountData.handReplacements.rightHand = parsedData;
+                }
+              }
+            } catch (e) {
+              console.warn(`[HAND REPLACEMENT] Could not fetch thing definition for ${parsedData.Tid}:`, e);
+              // Fallback to storing attachment data
+              if (slotId === "6") {
+                accountData.handReplacements.leftHand = parsedData;
+              } else if (slotId === "7") {
+                accountData.handReplacements.rightHand = parsedData;
+              }
             }
           }
         }
