@@ -422,6 +422,7 @@ const app = new Elysia()
       
       console.log("[AUTH] Current attachments:", Object.keys(attachmentsObj).map(k => `${k}: ${attachmentsObj[k] ? 'has data' : 'empty'}`).join(', '));
       
+      // Match Redux server format EXACTLY - no extra fields!
       return {
         vMaj: 188,
         vMinSrv: 1,
@@ -435,10 +436,6 @@ const app = new Elysia()
         attachments: typeof account.attachments === "string"
           ? account.attachments
           : JSON.stringify(account.attachments ?? {}),
-        leftHandColor: account.handColor || undefined,
-        rightHandColor: account.handColor || undefined,
-        leftHand: undefined,  // Required to signal hand replacement support
-        rightHand: undefined, // Required to signal hand replacement support
         isSoftBanned: false,
         showFlagWarning: false,
         flagTags: [],
@@ -446,15 +443,12 @@ const app = new Elysia()
         thingTagCount: 1,
         allThingsClonable: true,
         achievements: [],
-        isEditorHere: true,
-        isListEditorHere: true,
-        isOwnerHere: true,
         hasEditTools: true,
-        hasEditToolsPermanently: true,
-        editToolsExpiryDate: null,
-        isInEditToolsTrial: false,
-        wasEditToolsTrialEverActivated: false,
-        customSearchWords: ""
+        hasEditToolsPermanently: false,
+        editToolsExpiryDate: '2024-01-30T15:26:27.720Z',
+        isInEditToolsTrial: true,
+        wasEditToolsTrialEverActivated: true,
+        customSearchWords: ''
       };
     },
     {
@@ -542,6 +536,29 @@ const app = new Elysia()
         // The client handles "replaces hand when worn" logic by checking thing definitions
         if (slotId === "6" || slotId === "7") {
           console.log(`[WRIST] Storing wrist attachment in slot ${slotId}: ${JSON.stringify(parsedData)}`);
+          
+          // Check if this thing has the hand replacement attribute
+          const thingId = parsedData.Tid;
+          if (thingId) {
+            try {
+              const defPath = `./data/thing/def/${thingId}.json`;
+              const defFile = Bun.file(defPath);
+              if (await defFile.exists()) {
+                const def = await defFile.json();
+                console.log(`[WRIST] Thing ${thingId} attributes:`, def.a || "NONE");
+                if (def.a && Array.isArray(def.a) && def.a.includes(22)) {
+                  console.log(`[WRIST] ✅ Thing ${thingId} HAS hand replacement attribute (22)!`);
+                } else {
+                  console.log(`[WRIST] ⚠️ Thing ${thingId} DOES NOT have hand replacement attribute!`);
+                  console.log(`[WRIST] Thing definition:`, JSON.stringify(def).substring(0, 200));
+                }
+              } else {
+                console.log(`[WRIST] ⚠️ Thing definition not found for ${thingId}`);
+              }
+            } catch (e) {
+              console.error(`[WRIST] Error checking thing definition:`, e);
+            }
+          }
         }
         
         // Store attachment in the numbered slot
