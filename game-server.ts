@@ -422,6 +422,13 @@ const app = new Elysia()
       
       console.log("[AUTH] Current attachments:", Object.keys(attachmentsObj).map(k => `${k}: ${attachmentsObj[k] ? 'has data' : 'empty'}`).join(', '));
       
+      // Return attachments from account.json
+      const attachmentsString = typeof account.attachments === "string"
+        ? account.attachments
+        : JSON.stringify(account.attachments ?? {});
+      
+      console.log("[AUTH] Attachments:", attachmentsString.substring(0, 200) + "...");
+      
       // Match Redux server format EXACTLY - no extra fields!
       return {
         vMaj: 188,
@@ -433,9 +440,7 @@ const app = new Elysia()
         isFindable: true,
         age: 0,
         ageSecs: 0,
-        attachments: typeof account.attachments === "string"
-          ? account.attachments
-          : JSON.stringify(account.attachments ?? {}),
+        attachments: attachmentsString,
         isSoftBanned: false,
         showFlagWarning: false,
         flagTags: [],
