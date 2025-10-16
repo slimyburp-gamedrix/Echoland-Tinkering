@@ -2482,6 +2482,8 @@ console.log(`🦊 AreaBundles server is running at on port ${app_areaBundles.ser
 
 const app_thingDefs = new Elysia()
   .onRequest(({ request }) => {
+    const url = new URL(request.url);
+    console.log(`[THINGDEFS] 📥 Requested: ${url.pathname}`);
     console.info(JSON.stringify({
       server: "THINGDEFS",
       ts: new Date().toISOString(),
@@ -2497,18 +2499,21 @@ const app_thingDefs = new Elysia()
   .get(
     "/:thingId",
     async ({ params: { thingId } }) => {
+      console.log(`[THINGDEFS] 🔍 Looking for: ${thingId}`);
       const file = Bun.file(path.resolve("./data/thing/def/", thingId + ".json"));
       if (await file.exists()) {
         try {
-          return await file.json();
-
+          const def = await file.json();
+          console.log(`[THINGDEFS] ✅ Served ${thingId} (has attributes: ${def.a || 'none'})`);
+          return def;
         }
         catch (e) {
+          console.error(`[THINGDEFS] ❌ JSON parse error for ${thingId}:`, e);
           return Response.json("", { status: 200 })
         }
       }
       else {
-        console.error("client asked for a thingdef not on disk!!", thingId)
+        console.error(`[THINGDEFS] ❌ NOT FOUND: ${thingId}`)
         //return new Response("Thingdef not found", { status: 404 })
         return Response.json("", { status: 200 })
       }
