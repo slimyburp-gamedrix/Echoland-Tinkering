@@ -495,28 +495,36 @@ const app = new Elysia()
           }
         }
         
-        // Check if this object has "replaces hand when worn" property
-        if (parsedData && typeof parsedData === 'object') {
-          // Check for hand replacement properties
-          const hasHandReplacement = parsedData.replacesHand || 
-                                   parsedData.replacesHandWhenWorn || 
-                                   parsedData.handReplacement ||
-                                   (parsedData.properties && parsedData.properties.replacesHand);
+        // Special handling for wrist attachments (slots 6 and 7)
+        if (slotId === "6" || slotId === "7") {
+          console.log(`[WRIST] Processing wrist attachment in slot ${slotId}`);
           
-          if (hasHandReplacement) {
-            console.log(`[HAND REPLACEMENT] Object in slot ${slotId} has hand replacement property`);
-            // Store as hand replacement data
-            if (!accountData.handReplacements) {
-              accountData.handReplacements = {};
-            }
+          // Check if this object has "replaces hand when worn" property
+          if (parsedData && typeof parsedData === 'object') {
+            const hasHandReplacement = parsedData.replacesHand || 
+                                     parsedData.replacesHandWhenWorn || 
+                                     parsedData.handReplacement ||
+                                     (parsedData.properties && parsedData.properties.replacesHand);
             
-            // Determine which hand based on slot ID
-            if (slotId === "6" || slotId === "8") {
-              accountData.handReplacements.leftHand = parsedData;
-              console.log(`[HAND REPLACEMENT] Set left hand replacement`);
-            } else if (slotId === "7" || slotId === "9") {
-              accountData.handReplacements.rightHand = parsedData;
-              console.log(`[HAND REPLACEMENT] Set right hand replacement`);
+            if (hasHandReplacement) {
+              console.log(`[HAND REPLACEMENT] Object in wrist slot ${slotId} has hand replacement property`);
+              // Store as hand replacement data
+              if (!accountData.handReplacements) {
+                accountData.handReplacements = {};
+              }
+              
+              // Determine which hand based on slot ID (wrists control hands)
+              if (slotId === "6") {
+                // Left wrist controls left hand
+                accountData.handReplacements.leftHand = parsedData;
+                console.log(`[HAND REPLACEMENT] Set left hand replacement via left wrist (slot 6)`);
+              } else if (slotId === "7") {
+                // Right wrist controls right hand
+                accountData.handReplacements.rightHand = parsedData;
+                console.log(`[HAND REPLACEMENT] Set right hand replacement via right wrist (slot 7)`);
+              }
+            } else {
+              console.log(`[WRIST] Object in wrist slot ${slotId} does not have hand replacement property`);
             }
           }
         }
