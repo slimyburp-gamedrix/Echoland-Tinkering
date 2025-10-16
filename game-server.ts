@@ -390,6 +390,11 @@ const app = new Elysia()
       ast.value = `s:${generateObjectId()}`
       ast.httpOnly = true
 
+      // Extract hands from attachments for separate fields
+      const attachmentsObj = typeof account.attachments === "string" 
+        ? JSON.parse(account.attachments || "{}") 
+        : (account.attachments ?? {});
+      
       return {
         vMaj: 188,
         vMinSrv: 1,
@@ -403,6 +408,12 @@ const app = new Elysia()
         attachments: typeof account.attachments === "string"
           ? account.attachments
           : JSON.stringify(account.attachments ?? {}),
+        leftHand: attachmentsObj["6"] !== undefined 
+          ? (typeof attachmentsObj["6"] === "string" ? attachmentsObj["6"] : JSON.stringify(attachmentsObj["6"]))
+          : undefined,
+        rightHand: attachmentsObj["7"] !== undefined
+          ? (typeof attachmentsObj["7"] === "string" ? attachmentsObj["7"] : JSON.stringify(attachmentsObj["7"]))
+          : undefined,
         isSoftBanned: false,
         showFlagWarning: false,
         flagTags: [],

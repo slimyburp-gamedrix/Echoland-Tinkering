@@ -1,6 +1,9 @@
 # Runtime data directory
 data/
 
+# Cache directory
+cache/
+
 # Node modules
 node_modules/
 
