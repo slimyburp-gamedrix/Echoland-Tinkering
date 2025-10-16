@@ -465,21 +465,30 @@ const app = new Elysia()
       console.log("[ATTACHMENT] Updated full attachments");
     } else if (id !== undefined && data !== undefined) {
       // Incremental update path: single slot (including hands which are just numbered slots)
-      let parsedData: any = data;
-      if (typeof data === "string") {
-        try { parsedData = JSON.parse(data); } catch {
-          return new Response(JSON.stringify({ ok: false, error: "data must be JSON string" }), {
-            status: 422,
-            headers: { "Content-Type": "application/json" }
-          });
-        }
-      }
-      
-      // Store attachment in the numbered slot
       const slotId = String(id);
-      currentAttachments[slotId] = parsedData;
-      accountData.attachments = currentAttachments;
-      console.log(`[ATTACHMENT] Updated attachment slot ${slotId}:`, parsedData);
+      
+      // Empty string means remove this attachment
+      if (data === "" || data === null) {
+        delete currentAttachments[slotId];
+        accountData.attachments = currentAttachments;
+        console.log(`[ATTACHMENT] Removed attachment from slot ${slotId}`);
+      } else {
+        // Parse and store the attachment data
+        let parsedData: any = data;
+        if (typeof data === "string") {
+          try { parsedData = JSON.parse(data); } catch {
+            return new Response(JSON.stringify({ ok: false, error: "data must be JSON string" }), {
+              status: 422,
+              headers: { "Content-Type": "application/json" }
+            });
+          }
+        }
+        
+        // Store attachment in the numbered slot
+        currentAttachments[slotId] = parsedData;
+        accountData.attachments = currentAttachments;
+        console.log(`[ATTACHMENT] Updated attachment slot ${slotId}:`, parsedData);
+      }
     } else {
       return new Response(JSON.stringify({ ok: false, error: "Missing attachments or (id,data)" }), {
         status: 422,
