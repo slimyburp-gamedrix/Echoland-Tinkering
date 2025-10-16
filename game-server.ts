@@ -410,20 +410,6 @@ const app = new Elysia()
         attachments: typeof account.attachments === "string"
           ? account.attachments
           : JSON.stringify(account.attachments ?? {}),
-        leftHand: attachmentsObj["6"] !== undefined 
-          ? (typeof attachmentsObj["6"] === "string" ? attachmentsObj["6"] : JSON.stringify(attachmentsObj["6"]))
-          : undefined,
-        rightHand: attachmentsObj["7"] !== undefined
-          ? (typeof attachmentsObj["7"] === "string" ? attachmentsObj["7"] : JSON.stringify(attachmentsObj["7"]))
-          : undefined,
-        leftHandWrist: attachmentsObj["8"] !== undefined
-          ? (typeof attachmentsObj["8"] === "string" ? attachmentsObj["8"] : JSON.stringify(attachmentsObj["8"]))
-          : undefined,
-        rightHandWrist: attachmentsObj["9"] !== undefined
-          ? (typeof attachmentsObj["9"] === "string" ? attachmentsObj["9"] : JSON.stringify(attachmentsObj["9"]))
-          : undefined,
-        leftHandColor: account.handColor || undefined,
-        rightHandColor: account.handColor || undefined,
         isSoftBanned: false,
         showFlagWarning: false,
         flagTags: [],
@@ -525,16 +511,6 @@ const app = new Elysia()
       status: 200,
       headers: { "Content-Type": "application/json" }
     });
-  }, {
-    body: t.Union([
-      t.Object({
-        attachments: t.Union([t.String(), t.Record(t.String(), t.Any())])
-      }),
-      t.Object({ 
-        id: t.Union([t.String(), t.Number()]), 
-        data: t.Union([t.String(), t.Null(), t.Any()])
-      })
-    ])
   })
   // Set hand color for avatar
   .post("/person/sethandcolor", async ({ body }) => {
