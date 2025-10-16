@@ -435,8 +435,8 @@ const app = new Elysia()
         attachments: typeof account.attachments === "string"
           ? account.attachments
           : JSON.stringify(account.attachments ?? {}),
-        leftHandColor: account.handColor || undefined,
-        rightHandColor: account.handColor || undefined,
+        leftHandColor: account.handColor ? JSON.stringify(account.handColor) : undefined,
+        rightHandColor: account.handColor ? JSON.stringify(account.handColor) : undefined,
         isSoftBanned: false,
         showFlagWarning: false,
         flagTags: [],
