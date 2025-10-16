@@ -409,8 +409,12 @@ const app = new Elysia()
         rightHand: account.rightHand !== undefined
           ? (typeof account.rightHand === "string" ? account.rightHand : JSON.stringify(account.rightHand))
           : undefined,
-        leftHandColor: account.leftHandColor,
-        rightHandColor: account.rightHandColor,
+        leftHandColor: account.leftHandColor !== undefined
+          ? (typeof account.leftHandColor === "string" ? account.leftHandColor : JSON.stringify(account.leftHandColor))
+          : undefined,
+        rightHandColor: account.rightHandColor !== undefined
+          ? (typeof account.rightHandColor === "string" ? account.rightHandColor : JSON.stringify(account.rightHandColor))
+          : undefined,
         isSoftBanned: false,
         showFlagWarning: false,
         flagTags: [],
@@ -1817,6 +1821,27 @@ const app = new Elysia()
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, JSON.stringify(thingData, null, 2));
 
+    // Update topby list for the creator
+    try {
+      const topbyDir = "./data/person/topby";
+      await fs.mkdir(topbyDir, { recursive: true });
+      const topbyPath = `${topbyDir}/${creatorId}.json`;
+      
+      let topbyData: { ids: string[] } = { ids: [] };
+      try {
+        const existing = await fs.readFile(topbyPath, "utf-8");
+        topbyData = JSON.parse(existing);
+      } catch {
+        // File doesn't exist yet, use default
+      }
+      
+      // Add new thing to the front of the list
+      topbyData.ids = [thingId, ...(topbyData.ids || []).filter((id: string) => id !== thingId)].slice(0, 20);
+      await fs.writeFile(topbyPath, JSON.stringify(topbyData, null, 2));
+    } catch (e) {
+      console.warn("⚠️ Could not update topby list:", e);
+    }
+
     return new Response(JSON.stringify({ id: thingId }), {
       status: 200,
       headers: { "Content-Type": "application/json" }
@@ -2145,6 +2170,25 @@ const app = new Elysia()
       thingId: t.String(),
       updates: t.Record(t.String(), t.Any())
     })
+  })
+  .post("/thing/topby", async () => {
+    // Return top things created by the current user
+    const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+    const personId = account.personId;
+    const file = Bun.file(`./data/person/topby/${personId}.json`);
+
+    if (await file.exists()) {
+      const data = await file.json();
+      return new Response(JSON.stringify({ ids: data.ids.slice(0, 4) }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    } else {
+      return new Response(JSON.stringify({ ids: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
   })
   .post("/thing/topCreatedByPerson", async ({ body: { id } }) => {
     const file = Bun.file(`./data/person/topby/${id}.json`);
