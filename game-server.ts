@@ -395,6 +395,11 @@ const app = new Elysia()
         ? JSON.parse(account.attachments || "{}") 
         : (account.attachments ?? {});
       
+      // Prepare hand color response
+      const handColorResponse = account.handColor 
+        ? (typeof account.handColor === "string" ? account.handColor : JSON.stringify(account.handColor))
+        : undefined;
+      
       return {
         vMaj: 188,
         vMinSrv: 1,
@@ -414,6 +419,7 @@ const app = new Elysia()
         rightHand: attachmentsObj["7"] !== undefined
           ? (typeof attachmentsObj["7"] === "string" ? attachmentsObj["7"] : JSON.stringify(attachmentsObj["7"]))
           : undefined,
+        handColor: handColorResponse,
         isSoftBanned: false,
         showFlagWarning: false,
         flagTags: [],
@@ -440,13 +446,15 @@ const app = new Elysia()
   )
   // Save avatar body attachments to account.json
   .post("/person/updateattachment", async ({ body }) => {
+    console.log("[ATTACHMENT] Received request:", JSON.stringify(body));
     const { id, data, attachments } = body as any;
 
     const accountPath = "./data/person/account.json";
     let accountData: Record<string, any> = {};
     try {
       accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
-    } catch {
+    } catch (e) {
+      console.error("[ATTACHMENT] Failed to read account:", e);
       return new Response(JSON.stringify({ ok: false, error: "Account not found" }), {
         status: 404,
         headers: { "Content-Type": "application/json" }
@@ -518,14 +526,38 @@ const app = new Elysia()
       t.Object({
         attachments: t.Union([t.String(), t.Record(t.String(), t.Any())])
       }),
-      t.Object({ id: t.Union([t.String(), t.Number()]), data: t.String() })
+      t.Object({ 
+        id: t.Union([t.String(), t.Number()]), 
+        data: t.Union([t.String(), t.Null(), t.Any()])
+      })
     ])
   })
-  // Set hand color for avatar (client-side only, not persisted)
+  // Set hand color for avatar
   .post("/person/sethandcolor", async ({ body }) => {
-    // Hand colors are not persisted on the server in original Anyland
-    // This endpoint exists to prevent errors, but doesn't save anything
-    console.log("[HAND COLOR] Client set hand color (not persisted):", body);
+    console.log("[HAND COLOR] Received request:", body);
+    
+    const accountPath = "./data/person/account.json";
+    let accountData: Record<string, any> = {};
+    try {
+      accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
+    } catch (e) {
+      console.error("[HAND COLOR] Failed to read account:", e);
+      return new Response(JSON.stringify({ ok: false, error: "Account not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    // Store the hand color data
+    const { r, g, b } = body as any;
+    if (r !== undefined && g !== undefined && b !== undefined) {
+      accountData.handColor = { r, g, b };
+      console.log("[HAND COLOR] Saved hand color:", accountData.handColor);
+    } else {
+      console.warn("[HAND COLOR] Missing r, g, b values:", body);
+    }
+
+    await fs.writeFile(accountPath, JSON.stringify(accountData, null, 2));
     
     return new Response(JSON.stringify({ ok: true }), {
       status: 200,
