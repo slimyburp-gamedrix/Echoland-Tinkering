@@ -552,7 +552,7 @@ const app = new Elysia()
   })
   // Set hand color for avatar
   .post("/person/sethandcolor", async ({ body }) => {
-    const { leftHandColor, rightHandColor, handColor } = body as any;
+    const { leftHandColor, rightHandColor, handColor, r, g, b } = body as any;
 
     const accountPath = "./data/person/account.json";
     let accountData: Record<string, any> = {};
@@ -561,6 +561,24 @@ const app = new Elysia()
     } catch {
       return new Response(JSON.stringify({ ok: false, error: "Account not found" }), {
         status: 404,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    // Handle RGB color format (what the client actually sends)
+    if (r !== undefined || g !== undefined || b !== undefined) {
+      const colorObject = {
+        r: parseFloat(r || "0"),
+        g: parseFloat(g || "0"),
+        b: parseFloat(b || "0")
+      };
+      accountData.leftHandColor = colorObject;
+      accountData.rightHandColor = colorObject;
+      console.log("[HAND COLOR] Set both hands to RGB:", colorObject);
+      
+      await fs.writeFile(accountPath, JSON.stringify(accountData, null, 2));
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
         headers: { "Content-Type": "application/json" }
       });
     }
@@ -610,7 +628,7 @@ const app = new Elysia()
     }
 
     if (handColor === undefined && leftHandColor === undefined && rightHandColor === undefined) {
-      return new Response(JSON.stringify({ ok: false, error: "Missing handColor, leftHandColor, or rightHandColor" }), {
+      return new Response(JSON.stringify({ ok: false, error: "Missing color data" }), {
         status: 422,
         headers: { "Content-Type": "application/json" }
       });
@@ -626,7 +644,10 @@ const app = new Elysia()
     body: t.Object({
       handColor: t.Optional(t.Union([t.String(), t.Any()])),
       leftHandColor: t.Optional(t.Union([t.String(), t.Any()])),
-      rightHandColor: t.Optional(t.Union([t.String(), t.Any()]))
+      rightHandColor: t.Optional(t.Union([t.String(), t.Any()])),
+      r: t.Optional(t.String()),
+      g: t.Optional(t.String()),
+      b: t.Optional(t.String())
     })
   })
   .post("/p", () => ({ "vMaj": 188, "vMinSrv": 1 }))
