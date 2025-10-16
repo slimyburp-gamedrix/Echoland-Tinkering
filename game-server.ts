@@ -395,6 +395,8 @@ const app = new Elysia()
         ? JSON.parse(account.attachments || "{}") 
         : (account.attachments ?? {});
       
+      console.log("[AUTH] Current attachments:", Object.keys(attachmentsObj).map(k => `${k}: ${attachmentsObj[k] ? 'has data' : 'empty'}`).join(', '));
+      
       return {
         vMaj: 188,
         vMinSrv: 1,
@@ -414,8 +416,14 @@ const app = new Elysia()
         rightHand: attachmentsObj["7"] !== undefined
           ? (typeof attachmentsObj["7"] === "string" ? attachmentsObj["7"] : JSON.stringify(attachmentsObj["7"]))
           : undefined,
-        leftHandColor: account.handColor ? JSON.stringify(account.handColor) : undefined,
-        rightHandColor: account.handColor ? JSON.stringify(account.handColor) : undefined,
+        leftHandWrist: attachmentsObj["8"] !== undefined
+          ? (typeof attachmentsObj["8"] === "string" ? attachmentsObj["8"] : JSON.stringify(attachmentsObj["8"]))
+          : undefined,
+        rightHandWrist: attachmentsObj["9"] !== undefined
+          ? (typeof attachmentsObj["9"] === "string" ? attachmentsObj["9"] : JSON.stringify(attachmentsObj["9"]))
+          : undefined,
+        leftHandColor: account.handColor || undefined,
+        rightHandColor: account.handColor || undefined,
         isSoftBanned: false,
         showFlagWarning: false,
         flagTags: [],
