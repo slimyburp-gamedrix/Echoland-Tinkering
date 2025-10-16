@@ -517,82 +517,25 @@ const app = new Elysia()
         // Special handling for wrist attachments (slots 6 and 7)
         if (slotId === "6" || slotId === "7") {
           console.log(`[WRIST] Processing wrist attachment in slot ${slotId}`);
-          console.log(`[WRIST] Parsed data:`, JSON.stringify(parsedData, null, 2));
+          console.log(`[WRIST] Raw parsed data:`, JSON.stringify(parsedData, null, 2));
+          console.log(`[WRIST] Parsed data keys:`, Object.keys(parsedData || {}));
           
-          // Check if this object has "replaces hand when worn" property
+          // For now, let's just store ANY wrist attachment as a hand replacement for testing
+          // This will help us see if the basic mechanism works
           if (parsedData && typeof parsedData === 'object' && parsedData.Tid) {
-            console.log(`[WRIST] Checking for hand replacement properties in attachment data...`);
+            console.log(`[HAND REPLACEMENT] TESTING: Storing wrist attachment as hand replacement`);
             
-            // First check if the attachment data itself has hand replacement properties
-            let hasHandReplacement = false;
-            let handReplacementData = null;
-            
-            // Check attachment data directly
-            const attachmentHasHandReplacement = parsedData.replacesHand ||
-                                              parsedData.replacesHandWhenWorn || 
-                                              parsedData.handReplacement ||
-                                              parsedData["REPLACES HAND WHEN WORN"] ||
-                                              (parsedData.properties && parsedData.properties.replacesHand) ||
-                                              (parsedData.properties && parsedData.properties["REPLACES HAND WHEN WORN"]);
-            
-            if (attachmentHasHandReplacement) {
-              console.log(`[HAND REPLACEMENT] Found hand replacement property in attachment data`);
-              hasHandReplacement = true;
-              handReplacementData = parsedData;
-            } else {
-              // Try to fetch the object definition to check for hand replacement properties
-              try {
-                const thingDefPath = `./data/thing/def/${parsedData.Tid}.json`;
-                const fileExists = await fs.access(thingDefPath).then(() => true).catch(() => false);
-                
-                if (fileExists) {
-                  const thingDef = JSON.parse(await fs.readFile(thingDefPath, "utf-8"));
-                  console.log(`[WRIST] Fetched thing definition for ${parsedData.Tid}:`, JSON.stringify(thingDef, null, 2));
-                  
-                  const defHasHandReplacement = thingDef.replacesHand ||
-                                             thingDef.replacesHandWhenWorn || 
-                                             thingDef.handReplacement ||
-                                             thingDef["REPLACES HAND WHEN WORN"] ||
-                                             (thingDef.properties && thingDef.properties.replacesHand) ||
-                                             (thingDef.properties && thingDef.properties["REPLACES HAND WHEN WORN"]);
-                  
-                  if (defHasHandReplacement) {
-                    console.log(`[HAND REPLACEMENT] Found hand replacement property in thing definition`);
-                    hasHandReplacement = true;
-                    handReplacementData = thingDef;
-                  }
-                } else {
-                  console.log(`[WRIST] Thing definition file not found for ${parsedData.Tid}, using attachment data only`);
-                }
-              } catch (e) {
-                console.warn(`[WRIST] Could not fetch thing definition for ${parsedData.Tid}:`, e);
-              }
+            if (!accountData.handReplacements) {
+              accountData.handReplacements = {};
             }
             
-            if (hasHandReplacement && handReplacementData) {
-              console.log(`[HAND REPLACEMENT] Object in wrist slot ${slotId} has hand replacement property`);
-              // Store as hand replacement data
-              if (!accountData.handReplacements) {
-                accountData.handReplacements = {};
-              }
-              
-              // Determine which hand based on slot ID (wrists control hands)
-              if (slotId === "6") {
-                // Left wrist controls left hand
-                accountData.handReplacements.leftHand = handReplacementData;
-                console.log(`[HAND REPLACEMENT] Set left hand replacement via left wrist (slot 6)`);
-              } else if (slotId === "7") {
-                // Right wrist controls right hand
-                accountData.handReplacements.rightHand = handReplacementData;
-                console.log(`[HAND REPLACEMENT] Set right hand replacement via right wrist (slot 7)`);
-              }
-            } else {
-              console.log(`[WRIST] Object in wrist slot ${slotId} does not have hand replacement property`);
-              // Clear any existing hand replacement for this slot
-              if (accountData.handReplacements) {
-                if (slotId === "6") delete accountData.handReplacements.leftHand;
-                if (slotId === "7") delete accountData.handReplacements.rightHand;
-              }
+            // Store the attachment data as hand replacement for testing
+            if (slotId === "6") {
+              accountData.handReplacements.leftHand = parsedData;
+              console.log(`[HAND REPLACEMENT] TESTING: Set left hand replacement via left wrist (slot 6)`);
+            } else if (slotId === "7") {
+              accountData.handReplacements.rightHand = parsedData;
+              console.log(`[HAND REPLACEMENT] TESTING: Set right hand replacement via right wrist (slot 7)`);
             }
           }
         }
