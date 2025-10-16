@@ -109,8 +109,7 @@ async function initDefaults() {
       personId,
       screenName,
       homeAreaId,
-      attachments: {},
-      handReplacements: {}
+      attachments: {}
     };
 
     await fs.mkdir("./data/person", { recursive: true });
@@ -122,10 +121,6 @@ async function initDefaults() {
   let needsUpdate = false;
   if (!accountData.attachments) {
     accountData.attachments = {};
-    needsUpdate = true;
-  }
-  if (!accountData.handReplacements) {
-    accountData.handReplacements = {};
     needsUpdate = true;
   }
   
@@ -377,6 +372,11 @@ const app = new Elysia()
       method: request.method,
       url: request.url,
     }));
+    
+    // Log all requests that might be related to hands/attachments
+    if (request.url.includes('hand') || request.url.includes('attachment') || request.url.includes('person')) {
+      console.log(`[HAND DEBUG] ${request.method} ${request.url}`);
+    }
   })
   .onError(({ code, error, request }) => {
     console.info("error in middleware!", request.url, code);
@@ -385,6 +385,10 @@ const app = new Elysia()
   .onTransform(({ path, body }) => {
     if (path.includes("placement")) {
       console.log("Placement route hit:", path, JSON.stringify(body, null, 2));
+    }
+    // Log all POST requests with body for debugging
+    if (path.includes("person") || path.includes("hand") || path.includes("attachment")) {
+      console.log(`[DEBUG] POST ${path}:`, JSON.stringify(body, null, 2));
     }
   })
   .onTransform(({ path, body }) => {
@@ -429,8 +433,9 @@ const app = new Elysia()
         attachments: typeof account.attachments === "string"
           ? account.attachments
           : JSON.stringify(account.attachments ?? {}),
-        leftHand: account.handReplacements?.leftHand ? JSON.stringify(account.handReplacements.leftHand) : undefined,
-        rightHand: account.handReplacements?.rightHand ? JSON.stringify(account.handReplacements.rightHand) : undefined,
+        // leftHand and rightHand should NOT be returned - client handles this via wrist attachments
+        // leftHand: account.handReplacements?.leftHand || account.attachments?.leftHand || undefined,
+        // rightHand: account.handReplacements?.rightHand || account.attachments?.rightHand || undefined,
         isSoftBanned: false,
         showFlagWarning: false,
         flagTags: [],
@@ -456,6 +461,22 @@ const app = new Elysia()
     }
   )
   // Save avatar body attachments to account.json
+  // Alternative endpoint names that might be used
+  .post("/person/setattachment", async ({ body }) => {
+    console.log("[SETATTACHMENT] Received request:", JSON.stringify(body));
+    // Redirect to updateattachment logic
+    return app.routes.find(r => r.path === '/person/updateattachment')!.handler({ body } as any);
+  })
+  .post("/person/updatehand", async ({ body }) => {
+    console.log("[UPDATEHAND] Received request:", JSON.stringify(body));
+    // Redirect to updateattachment logic
+    return app.routes.find(r => r.path === '/person/updateattachment')!.handler({ body } as any);
+  })
+  .post("/person/sethand", async ({ body }) => {
+    console.log("[SETHAND] Received request:", JSON.stringify(body));
+    // Redirect to updateattachment logic
+    return app.routes.find(r => r.path === '/person/updateattachment')!.handler({ body } as any);
+  })
   .post("/person/updateattachment", async ({ body }) => {
     console.log("[ATTACHMENT] Received request:", JSON.stringify(body));
     const { id, data, attachments } = body as any;
@@ -514,56 +535,10 @@ const app = new Elysia()
           }
         }
         
-        // Special handling for wrist attachments (slots 6 and 7)
+        // Wrist attachments (slots 6 and 7) are just regular attachments
+        // The client handles "replaces hand when worn" logic by checking thing definitions
         if (slotId === "6" || slotId === "7") {
-          console.log(`[WRIST] Processing wrist attachment in slot ${slotId}`);
-          console.log(`[WRIST] Raw parsed data:`, JSON.stringify(parsedData, null, 2));
-          console.log(`[WRIST] Parsed data keys:`, Object.keys(parsedData || {}));
-          
-          // Store wrist attachment as hand replacement by fetching the thing definition
-          if (parsedData && typeof parsedData === 'object' && parsedData.Tid) {
-            console.log(`[HAND REPLACEMENT] Fetching thing definition for hand replacement`);
-            
-            if (!accountData.handReplacements) {
-              accountData.handReplacements = {};
-            }
-            
-            // Try to fetch the thing definition
-            try {
-              const thingDefPath = `./data/thing/def/${parsedData.Tid}.json`;
-              const fileExists = await fs.access(thingDefPath).then(() => true).catch(() => false);
-              
-              if (fileExists) {
-                const thingDef = JSON.parse(await fs.readFile(thingDefPath, "utf-8"));
-                console.log(`[HAND REPLACEMENT] Fetched thing definition for ${parsedData.Tid}`);
-                
-                // Store the thing definition as hand replacement
-                if (slotId === "6") {
-                  accountData.handReplacements.leftHand = thingDef;
-                  console.log(`[HAND REPLACEMENT] Set left hand replacement via left wrist (slot 6)`);
-                } else if (slotId === "7") {
-                  accountData.handReplacements.rightHand = thingDef;
-                  console.log(`[HAND REPLACEMENT] Set right hand replacement via right wrist (slot 7)`);
-                }
-              } else {
-                console.log(`[HAND REPLACEMENT] Thing definition not found for ${parsedData.Tid}, storing attachment data as fallback`);
-                // Fallback to storing attachment data if thing definition doesn't exist
-                if (slotId === "6") {
-                  accountData.handReplacements.leftHand = parsedData;
-                } else if (slotId === "7") {
-                  accountData.handReplacements.rightHand = parsedData;
-                }
-              }
-            } catch (e) {
-              console.warn(`[HAND REPLACEMENT] Could not fetch thing definition for ${parsedData.Tid}:`, e);
-              // Fallback to storing attachment data
-              if (slotId === "6") {
-                accountData.handReplacements.leftHand = parsedData;
-              } else if (slotId === "7") {
-                accountData.handReplacements.rightHand = parsedData;
-              }
-            }
-          }
+          console.log(`[WRIST] Storing wrist attachment in slot ${slotId}: ${JSON.stringify(parsedData)}`);
         }
         
         // Store attachment in the numbered slot
@@ -2232,6 +2207,14 @@ const app = new Elysia()
   )
   .get("/forum/forum/:id", ({ params: { id } }) => Bun.file(path.resolve("./data/forum/forum/", id + ".json")).json())
   .get("/forum/thread/:id", ({ params: { id } }) => Bun.file(path.resolve("./data/forum/thread/", id + ".json")).json())
+  // Catch-all route for debugging
+  .all("*", ({ request }) => {
+    console.log(`[CATCH-ALL] ${request.method} ${request.url}`);
+    return new Response(JSON.stringify({ error: "Not found" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" }
+    });
+  })
   .listen({
     hostname: HOST,
     port: PORT_API,
