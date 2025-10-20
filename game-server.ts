@@ -465,8 +465,8 @@ const app = new Elysia()
           console.error("[ATTACHMENT] Failed to read account after retries:", e);
           return new Response(JSON.stringify({ ok: false, error: "Account read failed" }), {
             status: 500,
-            headers: { "Content-Type": "application/json" }
-          });
+        headers: { "Content-Type": "application/json" }
+      });
         }
         // Wait a bit before retrying
         await new Promise(resolve => setTimeout(resolve, 50));
@@ -505,16 +505,16 @@ const app = new Elysia()
         console.log(`[ATTACHMENT] Removed attachment from slot ${slotId}`);
       } else {
         // Parse and store the attachment data
-        let parsedData: any = data;
-        if (typeof data === "string") {
-          try { parsedData = JSON.parse(data); } catch {
-            return new Response(JSON.stringify({ ok: false, error: "data must be JSON string" }), {
-              status: 422,
-              headers: { "Content-Type": "application/json" }
-            });
-          }
+      let parsedData: any = data;
+      if (typeof data === "string") {
+        try { parsedData = JSON.parse(data); } catch {
+          return new Response(JSON.stringify({ ok: false, error: "data must be JSON string" }), {
+            status: 422,
+            headers: { "Content-Type": "application/json" }
+          });
         }
-        
+      }
+      
         // Wrist attachments (slots 6 and 7) are just regular attachments
         // The client handles "replaces hand when worn" logic by checking thing definitions
         if (slotId === "6" || slotId === "7") {
@@ -562,7 +562,7 @@ const app = new Elysia()
   // Set hand color for avatar
   .post("/person/sethandcolor", async ({ body }) => {
     console.log("[HAND COLOR] Received request:", body);
-    
+
     const accountPath = "./data/person/account.json";
     let accountData: Record<string, any> = {};
     try {
@@ -590,7 +590,7 @@ const app = new Elysia()
     }
 
     await fs.writeFile(accountPath, JSON.stringify(accountData, null, 2));
-    
+
     return new Response(JSON.stringify({ ok: true }), {
       status: 200,
       headers: { "Content-Type": "application/json" }
