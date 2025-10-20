@@ -1352,9 +1352,9 @@ const app = new Elysia()
     })
   })
   .post("/placement/setattr", async ({ body }) => {
-    const { areaId, placementId, attr } = body;
+    const { areaId, placementId, attribute } = body;
     
-    if (!areaId || !placementId || attr === undefined) {
+    if (!areaId || !placementId || attribute === undefined) {
       return new Response(JSON.stringify({ ok: false, error: "Missing required fields" }), {
         status: 400,
         headers: { "Content-Type": "application/json" }
@@ -1372,8 +1372,8 @@ const app = new Elysia()
         placementData.A = [];
       }
       
-      // Parse attr as integer
-      const attrValue = parseInt(attr);
+      // Parse attribute as integer
+      const attrValue = parseInt(attribute);
       
       // Check if attribute already exists
       const attrIndex = placementData.A.indexOf(attrValue);
@@ -1420,7 +1420,7 @@ const app = new Elysia()
     body: t.Object({
       areaId: t.String(),
       placementId: t.String(),
-      attr: t.String()
+      attribute: t.String()
     })
   })
   .post("person/info",
