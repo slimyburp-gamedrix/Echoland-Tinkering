@@ -1362,10 +1362,32 @@ const app = new Elysia()
     }
 
     const placementPath = `./data/placement/info/${areaId}/${placementId}.json`;
+    const areaFilePath = `./data/area/load/${areaId}.json`;
     
     try {
-      // Read the placement file
-      const placementData = JSON.parse(await fs.readFile(placementPath, "utf-8"));
+      let placementData: any = null;
+      
+      // Try to read the individual placement file first
+      try {
+        placementData = JSON.parse(await fs.readFile(placementPath, "utf-8"));
+        console.log("[SETATTR] Found placement file for", placementId);
+      } catch (e) {
+        // If placement file doesn't exist, try to get it from area load file
+        console.log("[SETATTR] Placement file not found, reading from area load file");
+        try {
+          const areaData = JSON.parse(await fs.readFile(areaFilePath, "utf-8"));
+          if (Array.isArray(areaData.placements)) {
+            placementData = areaData.placements.find((p: any) => p.Id === placementId);
+            if (!placementData) {
+              throw new Error("Placement not found in area file");
+            }
+            console.log("[SETATTR] Found placement in area load file");
+          }
+        } catch (areaError) {
+          console.error("[SETATTR] Failed to read from area file:", areaError);
+          throw new Error("Placement not found");
+        }
+      }
       
       // Update the attributes array
       if (!Array.isArray(placementData.A)) {
@@ -1381,16 +1403,25 @@ const app = new Elysia()
       if (attrIndex === -1) {
         // Add the attribute if it doesn't exist
         placementData.A.push(attrValue);
+        console.log("[SETATTR] Added attribute", attrValue, "to placement", placementId);
       } else {
         // Remove the attribute if it exists (toggle behavior)
         placementData.A.splice(attrIndex, 1);
+        console.log("[SETATTR] Removed attribute", attrValue, "from placement", placementId);
       }
       
-      // Write the updated placement back
-      await fs.writeFile(placementPath, JSON.stringify(placementData, null, 2));
+      // Try to write the updated placement file
+      try {
+        // Ensure the directory exists
+        const placementDir = `./data/placement/info/${areaId}`;
+        await fs.mkdir(placementDir, { recursive: true });
+        await fs.writeFile(placementPath, JSON.stringify(placementData, null, 2));
+        console.log("[SETATTR] Updated placement file");
+      } catch (e) {
+        console.log("[SETATTR] Could not write placement file (may be read-only):", e);
+      }
       
-      // Also update the area load file
-      const areaFilePath = `./data/area/load/${areaId}.json`;
+      // Always update the area load file
       try {
         const areaData = JSON.parse(await fs.readFile(areaFilePath, "utf-8"));
         
@@ -1399,10 +1430,12 @@ const app = new Elysia()
           if (placementIndex !== -1) {
             areaData.placements[placementIndex].A = placementData.A;
             await fs.writeFile(areaFilePath, JSON.stringify(areaData, null, 2));
+            console.log("[SETATTR] Updated area load file");
           }
         }
       } catch (e) {
         console.error("[SETATTR] Failed to update area file:", e);
+        throw e;
       }
       
       return new Response(JSON.stringify({ ok: true }), {
