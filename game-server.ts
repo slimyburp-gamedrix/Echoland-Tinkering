@@ -81,93 +81,19 @@ class SessionManager {
 
 const sessionManager = new SessionManager();
 
-// ============== INTERACTIVE PROFILE ASSIGNMENT ==============
-// When a client connects, the server prompts the admin to choose a profile
-// This is perfect for local multiplayer testing
+// ============== WEB-BASED PROFILE ASSIGNMENT ==============
+// When a client connects, admin assigns their profile via web interface
+// Visit http://localhost:8000/admin to manage connecting clients
 
 // Queue for pending profile assignments
 // When a client connects without a profile, they wait here until admin assigns one
 const pendingClients: Array<{
+  id: string;
   resolve: (profile: string) => void;
   timestamp: Date;
 }> = [];
 
-// Flag to track if we're currently prompting for input
-let isPromptingForProfile = false;
-
-// Assigned profiles for this session (to avoid re-prompting on reconnects)
-// Maps some client identifier to profile name
-const assignedProfiles = new Map<string, string>();
-
-// Function to prompt admin for profile selection
-async function promptForProfile(): Promise<string> {
-  const profiles = await listProfiles();
-  
-  console.log("\n" + "=".repeat(50));
-  console.log("🎮 NEW CLIENT CONNECTING!");
-  console.log("=".repeat(50));
-  
-  if (profiles.length > 0) {
-    console.log("\n📋 Available profiles:");
-    profiles.forEach((p, i) => console.log(`   [${i + 1}] ${p}`));
-    console.log(`   [0] Create new random profile`);
-    console.log(`\n   Or type a new profile name to create it`);
-  } else {
-    console.log("\n📋 No profiles exist yet.");
-    console.log("   Type a name to create a new profile, or press Enter for random.");
-  }
-  
-  process.stdout.write("\n👉 Enter profile name or number: ");
-  
-  // Read from stdin
-  const input = await new Promise<string>((resolve) => {
-    const onData = (data: Buffer) => {
-      process.stdin.removeListener('data', onData);
-      resolve(data.toString().trim());
-    };
-    process.stdin.on('data', onData);
-  });
-  
-  // Handle input
-  if (input === "" || input === "0") {
-    return generateRandomUsername();
-  }
-  
-  // Check if it's a number (selecting from list)
-  const num = parseInt(input);
-  if (!isNaN(num) && num > 0 && num <= profiles.length) {
-    return profiles[num - 1];
-  }
-  
-  // Otherwise use the input as profile name
-  return input;
-}
-
-// Process the next pending client
-async function processNextPendingClient() {
-  if (isPromptingForProfile || pendingClients.length === 0) {
-    return;
-  }
-  
-  isPromptingForProfile = true;
-  const client = pendingClients.shift()!;
-  
-  try {
-    const profileName = await promptForProfile();
-    console.log(`\n✅ Assigned profile: ${profileName}\n`);
-    client.resolve(profileName);
-  } catch (e) {
-    console.error("Error getting profile:", e);
-    client.resolve(generateRandomUsername());
-  }
-  
-  isPromptingForProfile = false;
-  
-  // Process next client if any
-  if (pendingClients.length > 0) {
-    processNextPendingClient();
-  }
-}
+let pendingClientCounter = 0;
 
 // Get account path for a specific profile
 function getAccountPathForProfile(profileName: string): string {
@@ -681,6 +607,196 @@ const app = new Elysia()
     console.log(request.method, path, { body, params })
   })
 
+  // ============== ADMIN PANEL ==============
+  // Web interface to assign profiles to connecting clients
+  .get("/admin", async () => {
+    const profiles = await listProfiles();
+    const activeSessions = sessionManager.getActiveSessions();
+    
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+  <title>Echoland Admin - Profile Assignment</title>
+  <meta http-equiv="refresh" content="3">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+      min-height: 100vh;
+      color: #e8e8e8;
+      padding: 40px 20px;
+    }
+    .container { max-width: 800px; margin: 0 auto; }
+    h1 {
+      text-align: center;
+      font-size: 2em;
+      margin-bottom: 10px;
+      background: linear-gradient(90deg, #ff6b6b, #ffd93d);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .subtitle { text-align: center; color: #888; margin-bottom: 30px; }
+    .card {
+      background: rgba(255,255,255,0.05);
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 20px;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .card h2 { font-size: 1.2em; margin-bottom: 16px; color: #ffd93d; }
+    .pending { background: rgba(255, 107, 107, 0.2); border-color: rgba(255, 107, 107, 0.5); }
+    .pending h2 { color: #ff6b6b; }
+    .client-item {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 16px; margin-bottom: 12px;
+      background: rgba(0,0,0,0.3); border-radius: 8px;
+    }
+    .client-info { flex: 1; }
+    .client-id { font-size: 0.85em; color: #888; }
+    .assign-form { display: flex; gap: 8px; align-items: center; }
+    select, input[type="text"] {
+      padding: 8px 12px; border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.2);
+      background: rgba(0,0,0,0.5); color: #fff;
+    }
+    button {
+      padding: 8px 16px; border-radius: 6px; border: none;
+      background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+      color: #fff; font-weight: 600; cursor: pointer;
+    }
+    button:hover { transform: translateY(-1px); }
+    .no-pending {
+      text-align: center; padding: 40px; color: #888;
+      font-style: italic;
+    }
+    .online-list { display: flex; flex-wrap: wrap; gap: 10px; }
+    .online-player {
+      display: flex; align-items: center; gap: 8px;
+      background: rgba(0,255,136,0.1); padding: 8px 16px;
+      border-radius: 20px; border: 1px solid rgba(0,255,136,0.3);
+    }
+    .dot { width: 8px; height: 8px; background: #00ff88; border-radius: 50%; }
+    .profile-list { display: flex; flex-wrap: wrap; gap: 8px; }
+    .profile-tag {
+      background: rgba(255,255,255,0.1); padding: 6px 12px;
+      border-radius: 15px; font-size: 0.9em;
+    }
+    .refresh-note { text-align: center; color: #666; font-size: 0.85em; margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🎮 Echoland Admin</h1>
+    <p class="subtitle">Profile Assignment Panel</p>
+    
+    <div class="card pending">
+      <h2>⏳ Waiting Clients (${pendingClients.length})</h2>
+      ${pendingClients.length > 0 ? pendingClients.map(c => `
+        <div class="client-item">
+          <div class="client-info">
+            <div>New Client</div>
+            <div class="client-id">ID: ${c.id} | Waiting since: ${c.timestamp.toLocaleTimeString()}</div>
+          </div>
+          <form class="assign-form" action="/admin/assign" method="GET">
+            <input type="hidden" name="clientId" value="${c.id}">
+            <select name="profile">
+              <option value="">-- Select Profile --</option>
+              ${profiles.map(p => `<option value="${p}">${p}</option>`).join('')}
+            </select>
+            <span>or</span>
+            <input type="text" name="newProfile" placeholder="New name" style="width:120px">
+            <button type="submit">Assign</button>
+          </form>
+        </div>
+      `).join('') : '<div class="no-pending">No clients waiting. Start your Anyland clients!</div>'}
+    </div>
+    
+    <div class="card">
+      <h2>🟢 Online Players (${activeSessions.length})</h2>
+      ${activeSessions.length > 0 ? `
+        <div class="online-list">
+          ${activeSessions.map(s => `
+            <div class="online-player">
+              <span class="dot"></span>
+              <span>${s.screenName}</span>
+            </div>
+          `).join('')}
+        </div>
+      ` : '<div class="no-pending">No players online yet.</div>'}
+    </div>
+    
+    <div class="card">
+      <h2>📋 Available Profiles (${profiles.length})</h2>
+      ${profiles.length > 0 ? `
+        <div class="profile-list">
+          ${profiles.map(p => `<span class="profile-tag">${p}</span>`).join('')}
+        </div>
+      ` : '<div class="no-pending">No profiles created yet.</div>'}
+      <form action="/admin/create-profile" method="GET" style="margin-top:16px;display:flex;gap:8px;">
+        <input type="text" name="name" placeholder="Create new profile...">
+        <button type="submit">Create</button>
+      </form>
+    </div>
+    
+    <p class="refresh-note">Page auto-refreshes every 3 seconds</p>
+  </div>
+</body>
+</html>`;
+    
+    return new Response(html, { headers: { "Content-Type": "text/html" } });
+  })
+
+  // Assign a profile to a waiting client
+  .get("/admin/assign", async ({ query }) => {
+    const clientId = query.clientId;
+    let profileName = query.profile || query.newProfile?.trim();
+    
+    if (!clientId) {
+      return Response.redirect("/admin", 302);
+    }
+    
+    // Find the pending client
+    const clientIndex = pendingClients.findIndex(c => c.id === clientId);
+    if (clientIndex === -1) {
+      return Response.redirect("/admin", 302);
+    }
+    
+    // Generate random if no profile specified
+    if (!profileName) {
+      profileName = generateRandomUsername();
+    }
+    
+    // Check if profile exists, create if not
+    const profiles = await listProfiles();
+    if (!profiles.includes(profileName)) {
+      await createNewProfile(profileName);
+    }
+    
+    // Resolve the pending client's promise
+    const client = pendingClients.splice(clientIndex, 1)[0];
+    client.resolve(profileName);
+    
+    console.log(`✅ [ADMIN] Assigned profile "${profileName}" to client ${clientId}`);
+    
+    return Response.redirect("/admin", 302);
+  })
+
+  // Create a new profile from admin panel
+  .get("/admin/create-profile", async ({ query }) => {
+    let profileName = query.name?.trim();
+    
+    if (profileName) {
+      const profiles = await listProfiles();
+      if (!profiles.includes(profileName)) {
+        await createNewProfile(profileName);
+        console.log(`✅ [ADMIN] Created profile "${profileName}"`);
+      }
+    }
+    
+    return Response.redirect("/admin", 302);
+  })
+
   // API to list profiles (for tools/scripts)
   .get("/api/profiles", async () => {
     const profiles = await listProfiles();
@@ -729,14 +845,15 @@ const app = new Elysia()
         console.log(`[AUTH] Using default profile: ${profileName}`);
       }
       
-      // If still no profile, prompt admin interactively
+      // If still no profile, add to pending queue and wait for admin to assign via web panel
       if (!profileName) {
-        console.log(`[AUTH] New client connecting, waiting for profile assignment...`);
+        const clientId = `client-${++pendingClientCounter}`;
+        console.log(`\n🎮 [AUTH] New client connecting! Waiting for admin to assign profile...`);
+        console.log(`   👉 Open http://localhost:8000/admin to assign a profile\n`);
         
-        // Add to pending queue and wait for admin to assign
+        // Add to pending queue and wait for admin to assign via /admin page
         profileName = await new Promise<string>((resolve) => {
-          pendingClients.push({ resolve, timestamp: new Date() });
-          processNextPendingClient();
+          pendingClients.push({ id: clientId, resolve, timestamp: new Date() });
         });
       }
       

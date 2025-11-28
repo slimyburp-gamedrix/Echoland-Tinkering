@@ -38,14 +38,20 @@ goto menu
 echo.
 echo Starting multiplayer server with Docker...
 echo.
+docker-compose up -d
+echo.
 echo  ============================================
-echo   INTERACTIVE PROFILE ASSIGNMENT
-echo  ============================================
-echo   When clients connect, YOU choose their profile!
-echo   Watch the console for prompts.
+echo   SERVER STARTED!
 echo  ============================================
 echo.
-docker-compose up
+echo   ADMIN PANEL: http://localhost:8000/admin
+echo.
+echo   When clients connect, assign their profiles
+echo   through the admin panel in your browser!
+echo.
+echo   Use option 6 to view server logs.
+echo  ============================================
+echo.
 pause
 goto menu
 
