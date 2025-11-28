@@ -2,6 +2,43 @@
 title Echoland Multiplayer Server
 color 0A
 
+:: Try to find bun in common locations
+set "BUN_CMD="
+
+:: Check PATH first
+where bun >nul 2>nul && set "BUN_CMD=bun"
+
+:: Check user's .bun folder
+if "%BUN_CMD%"=="" if exist "%USERPROFILE%\.bun\bin\bun.exe" set "BUN_CMD=%USERPROFILE%\.bun\bin\bun.exe"
+
+:: Check scoop installation
+if "%BUN_CMD%"=="" if exist "%USERPROFILE%\scoop\shims\bun.exe" set "BUN_CMD=%USERPROFILE%\scoop\shims\bun.exe"
+
+:: Check chocolatey
+if "%BUN_CMD%"=="" if exist "C:\ProgramData\chocolatey\bin\bun.exe" set "BUN_CMD=C:\ProgramData\chocolatey\bin\bun.exe"
+
+:: Check Program Files
+if "%BUN_CMD%"=="" if exist "C:\Program Files\bun\bun.exe" set "BUN_CMD=C:\Program Files\bun\bun.exe"
+
+:: Check local node_modules (in case using bunx or similar)
+if "%BUN_CMD%"=="" if exist "%~dp0node_modules\.bin\bun.cmd" set "BUN_CMD=%~dp0node_modules\.bin\bun.cmd"
+
+:: If still not found, show error
+if "%BUN_CMD%"=="" (
+    echo.
+    echo  ERROR: Could not find Bun installation!
+    echo.
+    echo  Please tell me where bun.exe is located on your system.
+    echo  Or install Bun by running in PowerShell:
+    echo    irm bun.sh/install.ps1 ^| iex
+    echo.
+    echo  Then restart this batch file.
+    echo.
+    pause
+    exit /b 1
+)
+
+echo  Found Bun at: %BUN_CMD%
 echo.
 echo  ============================================
 echo     ECHOLAND MULTIPLAYER SERVER
@@ -35,13 +72,13 @@ echo.
 echo Starting multiplayer server...
 echo Players connect with X-Profile header or ?profile= param
 echo.
-bun game-server.ts
+"%BUN_CMD%" game-server.ts
 pause
 goto menu
 
 :list_profiles
 echo.
-bun create-profile.ts --list
+"%BUN_CMD%" create-profile.ts --list
 echo.
 pause
 goto menu
@@ -50,9 +87,9 @@ goto menu
 echo.
 set /p pname=Enter profile name (or press Enter for random): 
 if "%pname%"=="" (
-    bun create-profile.ts
+    "%BUN_CMD%" create-profile.ts
 ) else (
-    bun create-profile.ts %pname%
+    "%BUN_CMD%" create-profile.ts %pname%
 )
 echo.
 pause
@@ -61,16 +98,16 @@ goto menu
 :start_with_profile
 echo.
 echo Existing profiles:
-bun create-profile.ts --list
+"%BUN_CMD%" create-profile.ts --list
 echo.
 set /p testprofile=Enter profile name to use as default (for testing): 
 if "%testprofile%"=="" (
     echo No profile specified, starting without default.
-    bun game-server.ts
+    "%BUN_CMD%" game-server.ts
 ) else (
     echo Starting server with default profile: %testprofile%
     set DEFAULT_PROFILE=%testprofile%
-    bun game-server.ts
+    "%BUN_CMD%" game-server.ts
 )
 pause
 goto menu
