@@ -38,20 +38,14 @@ goto menu
 echo.
 echo Starting multiplayer server with Docker...
 echo.
-docker-compose up -d
-echo.
 echo  ============================================
-echo   SERVER STARTED!
+echo   INTERACTIVE PROFILE ASSIGNMENT
 echo  ============================================
-echo.
-echo   To select your profile, open in browser:
-echo   http://localhost:8000/profile
-echo.
-echo   Then launch your Anyland client!
-echo.
-echo   Check logs with option 6.
+echo   When clients connect, YOU choose their profile!
+echo   Watch the console for prompts.
 echo  ============================================
 echo.
+docker-compose up
 pause
 goto menu
 
