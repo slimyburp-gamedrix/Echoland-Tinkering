@@ -7,21 +7,33 @@
 # API Routes - Port 8000
 :80 {
     handle {
-        reverse_proxy al-gameserver:8000
+        reverse_proxy al-gameserver:8000 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+        }
     }
 }
 
 # Thing Definitions CDN - Port 8001
 http://d6ccx151yatz6.cloudfront.net {
-    reverse_proxy al-gameserver:8001
+    reverse_proxy al-gameserver:8001 {
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+    }
 }
 
 # Area Bundles CDN - Port 8002
 http://d26e4xubm8adxu.cloudfront.net {
-    reverse_proxy al-gameserver:8002
+    reverse_proxy al-gameserver:8002 {
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+    }
 }
 
 # Steam User Images CDN - Port 8003
 http://steamuserimages-a.akamaihd.net {
-    reverse_proxy al-gameserver:8003
+    reverse_proxy al-gameserver:8003 {
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+    }
 }
