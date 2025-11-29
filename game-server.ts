@@ -43,16 +43,6 @@ function getProfileFromCookie(cookie?: any): string | null {
 }
 
 async function resolveAccountPath(cookie?: any): Promise<string> {
-  const profileName = getProfileFromCookie(cookie);
-  if (profileName) {
-    await ensureProfileAccount(profileName);
-    return getAccountPathForProfile(profileName);
-  }
-  try {
-    await fs.access(LEGACY_ACCOUNT_PATH);
-  } catch {
-    await initDefaults();
-  }
   return LEGACY_ACCOUNT_PATH;
 }
 
@@ -496,8 +486,6 @@ async function releaseProfileLock(request: Request) {
     requestProfileMap.delete(request);
   }
 }
-
-await initDefaults()
 
 const areaIndex: { name: string, description?: string, id: string, playerCount: number }[] = [];
 const areaByUrlName = new Map<string, string>()
