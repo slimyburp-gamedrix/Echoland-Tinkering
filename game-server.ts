@@ -602,7 +602,7 @@ try {
     console.log(`✅ Injected default area "${defaultAreaName}" into arealist.json`);
   }
 } catch {
-  console.warn("⚠️ Could not inject default area: account.json missing or invalid.");
+  // No legacy account yet – skip default area injection until a profile connects
 }
 
 
@@ -779,9 +779,15 @@ const app = new Elysia()
       ast.value = sessionToken;
       ast.httpOnly = true;
 
-      const profileCookie = cookie[ACTIVE_PROFILE_COOKIE] ?? (cookie[ACTIVE_PROFILE_COOKIE] = { value: "", httpOnly: true });
-      profileCookie.value = profileName;
-      profileCookie.httpOnly = true;
+      const profileCookie = cookie[ACTIVE_PROFILE_COOKIE];
+      if (profileCookie && typeof profileCookie.set === "function") {
+        profileCookie.set({
+          value: profileName,
+          httpOnly: true,
+          sameSite: "lax",
+          path: "/"
+        });
+      }
 
       const attachmentsObj = typeof account.attachments === "string"
         ? JSON.parse(account.attachments || "{}")
