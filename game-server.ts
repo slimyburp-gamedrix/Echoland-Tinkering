@@ -3,287 +3,6 @@ import { Elysia, t } from 'elysia'
 import * as fs from "node:fs/promises";
 import { AreaInfoSchema } from "./lib/schemas";
 
-// ============== TRUE MULTIPLAYER SYSTEM ==============
-// One server handles multiple clients, each with their own profile
-// Clients identify themselves via X-Profile header or profile query param
-
-const ACCOUNTS_DIR = "./data/person/accounts";
-const LEGACY_ACCOUNT_PATH = "./data/person/account.json";
-
-// Optional: Default profile for testing (set via DEFAULT_PROFILE env var)
-// When set, clients without a profile header will use this profile
-const DEFAULT_PROFILE = Bun.env.DEFAULT_PROFILE || "";
-
-// Session manager - maps session tokens to profile data
-interface SessionData {
-  profileName: string;
-  personId: string;
-  screenName: string;
-  homeAreaId: string;
-  connectedAt: Date;
-}
-
-class SessionManager {
-  private sessions = new Map<string, SessionData>();
-  private profileToSession = new Map<string, string>(); // profileName -> sessionToken
-  
-  createSession(profileName: string, accountData: any): string {
-    // Check if this profile already has an active session
-    const existingToken = this.profileToSession.get(profileName);
-    if (existingToken && this.sessions.has(existingToken)) {
-      console.log(`🔄 [SESSION] Profile "${profileName}" reconnected`);
-      return existingToken;
-    }
-    
-    const token = `s:${generateObjectId()}`;
-    const sessionData: SessionData = {
-      profileName,
-      personId: accountData.personId,
-      screenName: accountData.screenName,
-      homeAreaId: accountData.homeAreaId,
-      connectedAt: new Date()
-    };
-    
-    this.sessions.set(token, sessionData);
-    this.profileToSession.set(profileName, token);
-    console.log(`✅ [SESSION] Created session for "${profileName}" (${this.sessions.size} active)`);
-    return token;
-  }
-  
-  getSession(token: string): SessionData | undefined {
-    return this.sessions.get(token);
-  }
-  
-  getSessionByProfile(profileName: string): SessionData | undefined {
-    const token = this.profileToSession.get(profileName);
-    if (token) {
-      return this.sessions.get(token);
-    }
-    return undefined;
-  }
-  
-  removeSession(token: string): void {
-    const session = this.sessions.get(token);
-    if (session) {
-      this.profileToSession.delete(session.profileName);
-      this.sessions.delete(token);
-      console.log(`🔴 [SESSION] Removed session for "${session.profileName}" (${this.sessions.size} active)`);
-    }
-  }
-  
-  getActiveSessions(): SessionData[] {
-    return Array.from(this.sessions.values());
-  }
-  
-  getActiveCount(): number {
-    return this.sessions.size;
-  }
-}
-
-const sessionManager = new SessionManager();
-
-// ============== WEB-BASED PROFILE ASSIGNMENT ==============
-// When a client connects, admin assigns their profile via web interface
-// Visit http://localhost:8000/admin to manage connecting clients
-
-// Queue for pending profile assignments
-// When a client connects without a profile, they wait here until admin assigns one
-const pendingClients: Array<{
-  id: string;
-  resolve: (profile: string) => void;
-  timestamp: Date;
-}> = [];
-
-let pendingClientCounter = 0;
-
-// Get account path for a specific profile
-function getAccountPathForProfile(profileName: string): string {
-  return `${ACCOUNTS_DIR}/${profileName}.json`;
-}
-
-function resolveAccountPath(profileName?: string | null): string {
-  return profileName ? getAccountPathForProfile(profileName) : LEGACY_ACCOUNT_PATH;
-}
-
-// Get profile name from cookie (simpler than session management)
-function getProfileFromCookie(cookie?: any): string | null {
-  // Check for profile cookie (set by /auth/start)
-  if (cookie?.profile?.value) {
-    return cookie.profile.value;
-  }
-  // Fallback: check if ast cookie contains profile info (legacy)
-  if (cookie?.ast?.value) {
-    const session = sessionManager.getSession(cookie.ast.value);
-    if (session) {
-      return session.profileName;
-    }
-  }
-  return null;
-}
-
-async function loadLegacyAccount(): Promise<Record<string, any> | null> {
-  try {
-    return JSON.parse(await fs.readFile(LEGACY_ACCOUNT_PATH, "utf-8"));
-  } catch {
-    return null;
-  }
-}
-
-// Get account data from cookie - simple and direct like the solo version
-async function getAccountFromCookie(cookie?: any): Promise<{ account: Record<string, any> | null; profileName: string | null; accountPath: string | null }> {
-  let profileName = getProfileFromCookie(cookie);
-  if (profileName) {
-    const account = await loadAccountData(profileName);
-    if (account) {
-      return {
-        account,
-        profileName,
-        accountPath: getAccountPathForProfile(profileName)
-      };
-    } else {
-      // Profile might have been deleted - fall back to legacy
-      profileName = null;
-    }
-  }
-
-  const legacyAccount = await loadLegacyAccount();
-  if (legacyAccount) {
-    return {
-      account: legacyAccount,
-      profileName: null,
-      accountPath: LEGACY_ACCOUNT_PATH
-    };
-  }
-
-  return { account: null, profileName: null, accountPath: null };
-}
-
-// Safe helper to get account data with fallback (won't throw) - like solo version but profile-aware
-async function getAccountSafe(cookie?: any): Promise<{ personId: string; screenName: string; accountPath: string | null; profileName: string | null }> {
-  const result = await getAccountFromCookie(cookie);
-  if (result.account) {
-    return {
-      personId: result.account.personId || "unknown",
-      screenName: result.account.screenName || "anonymous",
-      accountPath: result.accountPath,
-      profileName: result.profileName
-    };
-  }
-  return {
-    personId: "unknown",
-    screenName: "anonymous",
-    accountPath: null,
-    profileName: null
-  };
-}
-
-// Alias for backward compatibility  
-async function getAccountFromSession(cookie?: any): Promise<{ account: Record<string, any> | null; profileName: string | null; session: SessionData | null }> {
-  const result = await getAccountFromCookie(cookie);
-  if (result.profileName) {
-    const session = sessionManager.getSessionByProfile(result.profileName);
-    return { account: result.account, profileName: result.profileName, session: session || null };
-  }
-  return { account: null, profileName: null, session: null };
-}
-
-// Load account data for a profile
-async function loadAccountData(profileName: string): Promise<Record<string, any> | null> {
-  try {
-    const accountPath = getAccountPathForProfile(profileName);
-    return JSON.parse(await fs.readFile(accountPath, "utf-8"));
-  } catch {
-    return null;
-  }
-}
-
-// Save account data for a profile
-async function saveAccountData(profileName: string, data: Record<string, any>): Promise<void> {
-  const accountPath = getAccountPathForProfile(profileName);
-  await fs.mkdir(ACCOUNTS_DIR, { recursive: true });
-  await fs.writeFile(accountPath, JSON.stringify(data, null, 2));
-}
-
-// Generate a random username
-function generateRandomUsername(): string {
-  const adjectives = ["Swift", "Bright", "Shadow", "Mystic", "Cosmic", "Thunder", "Crystal", "Ember", "Frost", "Storm", "Golden", "Silver", "Azure", "Crimson", "Violet"];
-  const nouns = ["Wolf", "Phoenix", "Dragon", "Hawk", "Tiger", "Serpent", "Raven", "Fox", "Bear", "Lion", "Eagle", "Falcon", "Panther", "Lynx", "Owl"];
-  const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
-  const noun = nouns[Math.floor(Math.random() * nouns.length)];
-  const num = Math.floor(Math.random() * 10000);
-  return `${adj}${noun}${num}`;
-}
-
-// List all existing profiles
-async function listProfiles(): Promise<string[]> {
-  try {
-    await fs.mkdir(ACCOUNTS_DIR, { recursive: true });
-    const files = await fs.readdir(ACCOUNTS_DIR);
-    return files
-      .filter((f: string) => f.endsWith('.json'))
-      .map((f: string) => f.replace('.json', ''));
-  } catch {
-    return [];
-  }
-}
-
-// Create a new profile (does NOT create .bat files anymore - server is centralized)
-async function createNewProfile(profileName: string): Promise<{ profileName: string; accountData: any }> {
-  const personId = crypto.randomUUID().replace(/-/g, "").slice(0, 24);
-  const homeAreaId = crypto.randomUUID().replace(/-/g, "").slice(0, 24);
-  
-  const accountData = {
-    personId,
-    screenName: profileName,
-    homeAreaId,
-    attachments: {}
-  };
-  
-  await saveAccountData(profileName, accountData);
-  
-  console.log(`✨ [PROFILE] Created new profile: ${profileName}`);
-  console.log(`   Person ID: ${personId}`);
-  
-  return { profileName, accountData };
-}
-
-// Helper to get profile from request (via header, cookie, or query param)
-function getProfileFromRequest(request: Request, cookie?: any): string | null {
-  // 1. Check X-Profile header
-  const headerProfile = request.headers.get("X-Profile");
-  if (headerProfile) return headerProfile;
-  
-  // 2. Check query parameter
-  const url = new URL(request.url);
-  const queryProfile = url.searchParams.get("profile");
-  if (queryProfile) return queryProfile;
-  
-  // 3. Check cookie (ast cookie contains session token, we can look up profile from it)
-  if (cookie?.ast?.value) {
-    const session = sessionManager.getSession(cookie.ast.value);
-    if (session) return session.profileName;
-  }
-  
-  return null;
-}
-
-// Helper to get session data from request
-function getSessionFromRequest(request: Request, cookie?: any): SessionData | null {
-  // First check cookie for session token
-  if (cookie?.ast?.value) {
-    const session = sessionManager.getSession(cookie.ast.value);
-    if (session) return session;
-  }
-  
-  // Fallback: look up by profile name
-  const profileName = getProfileFromRequest(request, cookie);
-  if (profileName) {
-    return sessionManager.getSessionByProfile(profileName) || null;
-  }
-  
-  return null;
-}
-
 // Simple mutex for preventing concurrent account.json modifications
 class AsyncMutex {
   private mutex = Promise.resolve();
@@ -309,6 +28,19 @@ class AsyncMutex {
 }
 
 const accountMutex = new AsyncMutex();
+const profileSwapMutex = new AsyncMutex();
+
+const ACCOUNTS_DIR = "./data/person/accounts";
+const LEGACY_ACCOUNT_PATH = "./data/person/account.json";
+const ACTIVE_PROFILE_COOKIE = "profile";
+
+function getAccountPathForProfile(profileName: string): string {
+  return `${ACCOUNTS_DIR}/${profileName}.json`;
+}
+
+function getProfileFromCookie(cookie?: any): string | null {
+  return cookie?.[ACTIVE_PROFILE_COOKIE]?.value ?? null;
+}
 
 const HOST = Bun.env.HOST ?? "0.0.0.0";
 const PORT_API = Number(Bun.env.PORT_API ?? 8000);
@@ -400,58 +132,195 @@ async function injectInitialAreaToList(areaId: string, areaName: string) {
 
 // removed duplicate default imports; using namespace imports declared above
 
-// Initialize server (creates necessary directories, no profile needed)
-async function initServer() {
-  console.log("\n🌐 ============== ECHOLAND MULTIPLAYER SERVER ==============");
-  console.log("   Multiple clients can connect with different profiles");
-  console.log("   Clients identify via X-Profile header or ?profile= param\n");
-  
-  // Create necessary directories
-  await fs.mkdir(ACCOUNTS_DIR, { recursive: true });
-  await fs.mkdir("./data/person/info", { recursive: true });
-  await fs.mkdir("./data/area/info", { recursive: true });
-  await fs.mkdir("./data/area/load", { recursive: true });
-  await fs.mkdir("./data/area/bundle", { recursive: true });
-  await fs.mkdir("./data/area/subareas", { recursive: true });
-  
-  // Show default profile if set
-  if (DEFAULT_PROFILE) {
-    console.log(`🎮 Default profile: ${DEFAULT_PROFILE}`);
-    console.log(`   (Clients without a profile header will use this)`);
+async function initDefaults() {
+  const accountPath = "./data/person/account.json";
+
+  let accountData: Record<string, any> = {};
+  try {
+    accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
+  } catch {
+    // Create new identity
+    const personId = crypto.randomUUID().replace(/-/g, "").slice(0, 24);
+    const screenName = "User" + Math.floor(Math.random() * 10000);
+    const homeAreaId = crypto.randomUUID().replace(/-/g, "").slice(0, 24);
+
+    accountData = {
+      personId,
+      screenName,
+      homeAreaId,
+      attachments: {}
+    };
+
+    await fs.mkdir("./data/person", { recursive: true });
+    await fs.writeFile(accountPath, JSON.stringify(accountData, null, 2));
+    console.log(`🧠 Memory card initialized for ${screenName}`);
+  }
+
+  // Ensure required fields exist for existing accounts
+  let needsUpdate = false;
+  if (!accountData.attachments) {
+    accountData.attachments = {};
+    needsUpdate = true;
   }
   
-  // List existing profiles
-  const existingProfiles = await listProfiles();
-  if (existingProfiles.length > 0) {
-    console.log(`📋 Available profiles: ${existingProfiles.join(", ")}`);
-  } else {
-    console.log(`📋 No profiles yet. Clients can create profiles via /auth/start`);
+  // Save updated account data if needed
+  if (needsUpdate) {
+    await fs.writeFile(accountPath, JSON.stringify(accountData, null, 2));
+    console.log(`🔄 Updated account data with missing fields`);
   }
-  console.log("");
+
+  // Create person info file
+  const infoPath = `./data/person/info/${accountData.personId}.json`;
+  try {
+    await fs.access(infoPath);
+  } catch {
+    const personInfo = {
+      id: accountData.personId,
+      screenName: accountData.screenName,
+      age: 0,
+      statusText: "",
+      isFindable: true,
+      isBanned: false,
+      lastActivityOn: new Date().toISOString(),
+      isFriend: false,
+      isEditorHere: true,
+      isListEditorHere: true,
+      isOwnerHere: true,
+      isAreaLocked: false,
+      isOnline: true
+    };
+
+    await fs.mkdir("./data/person/info", { recursive: true });
+    await fs.writeFile(infoPath, JSON.stringify(personInfo, null, 2));
+    console.log(`📇 Created person info file for ${accountData.screenName}`);
+  }
+  // Check if home area already exists
+  const areaInfoPath = `./data/area/info/${accountData.homeAreaId}.json`;
+
+  try {
+    await fs.access(areaInfoPath);
+    console.log(`✅ Home area already exists for ${accountData.screenName}, skipping creation`);
+    return; // Exit early, skip creating area again
+  } catch {
+    console.log(`🆕 Creating home area for ${accountData.screenName}`);
+  }
+
+  // Create default home area
+  const areaId = accountData.homeAreaId;
+  const areaName = `${accountData.screenName}'s home`;
+  const areaKey = `rr${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
+  const bundleFolder = `./data/area/bundle/${areaId}`;
+  await fs.mkdir(bundleFolder, { recursive: true });
+  const bundlePath = `${bundleFolder}/${areaKey}.json`;
+  await fs.writeFile(bundlePath, JSON.stringify({ thingDefinitions: [], serveTime: 0 }, null, 2));
+  const subareaPath = `./data/area/subareas/${areaId}.json`;
+  await fs.writeFile(subareaPath, JSON.stringify({ subareas: [] }, null, 2));
+
+  const areaInfo = {
+    editors: [
+      {
+        id: accountData.personId,
+        name: accountData.screenName,
+        isOwner: true
+      }
+    ],
+    listEditors: [],
+    copiedFromAreas: [],
+    name: areaName,
+    creationDate: new Date().toISOString(),
+    totalVisitors: 0,
+    isZeroGravity: false,
+    hasFloatingDust: false,
+    isCopyable: false,
+    isExcluded: false,
+    renameCount: 0,
+    copiedCount: 0,
+    isFavorited: false
+  };
+
+  const areaLoad = {
+    ok: true,
+    areaId,
+    areaName,
+    areaKey,
+    areaCreatorId: accountData.personId,
+    isPrivate: false,
+    isZeroGravity: false,
+    hasFloatingDust: false,
+    isCopyable: false,
+    onlyOwnerSetsLocks: false,
+    isExcluded: false,
+    environmentChangersJSON: JSON.stringify({ environmentChangers: [] }),
+    requestorIsEditor: true,
+    requestorIsListEditor: true,
+    requestorIsOwner: true,
+    placements: [
+      {
+        Id: crypto.randomUUID().replace(/-/g, "").slice(0, 24),
+        Tid: "000000000000000000000001", // Ground object ID
+        P: { x: 0, y: -0.3, z: 0 },
+        R: { x: 0, y: 0, z: 0 }
+      }
+    ],
+    serveTime: 17
+  };
+
+  const areaBundle = {
+    thingDefinitions: [],
+    serveTime: 3
+  };
+
+  await fs.mkdir(`./data/area/info`, { recursive: true });
+  await fs.mkdir(`./data/area/load`, { recursive: true });
+  await fs.mkdir(`./data/area/bundle`, { recursive: true });
+
+  await fs.writeFile(`./data/area/info/${areaId}.json`, JSON.stringify(areaInfo, null, 2));
+  await fs.writeFile(`./data/area/load/${areaId}.json`, JSON.stringify(areaLoad, null, 2));
+  await fs.writeFile(`./data/area/bundle/${areaId}.json`, JSON.stringify(areaBundle, null, 2));
+
+  console.log(`🌍 Created default home area for ${accountData.screenName}`);
 }
 
-// Setup a profile for a connecting client (creates home area if needed)
-async function setupClientProfile(profileName: string): Promise<{ accountData: Record<string, any>; isNew: boolean }> {
-  let accountData: Record<string, any> | null = await loadAccountData(profileName);
-  let isNew = false;
-  
-  if (!accountData) {
-    // Create new profile
-    const result = await createNewProfile(profileName);
-    accountData = result.accountData;
-    isNew = true;
+async function listProfiles(): Promise<string[]> {
+  try {
+    await fs.mkdir(ACCOUNTS_DIR, { recursive: true });
+    const files = await fs.readdir(ACCOUNTS_DIR);
+    return files.filter((name) => name.endsWith(".json")).map((name) => name.replace(".json", ""));
+  } catch {
+    return [];
   }
-  
-  // At this point accountData is guaranteed to be non-null
-  const account: Record<string, any> = accountData;
-  
-  // Ensure required fields exist
-  if (!account.attachments) {
-    account.attachments = {};
-    await saveAccountData(profileName, account);
+}
+
+async function loadAccountData(profileName: string): Promise<Record<string, any> | null> {
+  try {
+    const data = await fs.readFile(getAccountPathForProfile(profileName), "utf-8");
+    return JSON.parse(data);
+  } catch {
+    return null;
   }
-  
-  // Create person info file if needed
+}
+
+async function saveAccountData(profileName: string, data: Record<string, any>): Promise<void> {
+  await fs.mkdir(ACCOUNTS_DIR, { recursive: true });
+  await fs.writeFile(getAccountPathForProfile(profileName), JSON.stringify(data, null, 2));
+}
+
+async function createProfileAccount(profileName: string): Promise<Record<string, any>> {
+  const personId = crypto.randomUUID().replace(/-/g, "").slice(0, 24);
+  const homeAreaId = crypto.randomUUID().replace(/-/g, "").slice(0, 24);
+  const accountData = {
+    personId,
+    screenName: profileName,
+    homeAreaId,
+    attachments: {}
+  };
+  await saveAccountData(profileName, accountData);
+  await ensurePersonInfo(accountData);
+  await ensureHomeArea(accountData);
+  return accountData;
+}
+
+async function ensurePersonInfo(account: Record<string, any>) {
   const infoPath = `./data/person/info/${account.personId}.json`;
   try {
     await fs.access(infoPath);
@@ -471,86 +340,150 @@ async function setupClientProfile(profileName: string): Promise<{ accountData: R
       isAreaLocked: false,
       isOnline: true
     };
+    await fs.mkdir("./data/person/info", { recursive: true });
     await fs.writeFile(infoPath, JSON.stringify(personInfo, null, 2));
     console.log(`📇 [PROFILE] Created person info for ${account.screenName}`);
   }
-  
-  // Create home area if needed
+}
+
+async function ensureHomeArea(account: Record<string, any>) {
   const areaInfoPath = `./data/area/info/${account.homeAreaId}.json`;
   try {
     await fs.access(areaInfoPath);
+    return;
   } catch {
-    // Create default home area for this profile
-    const areaId = account.homeAreaId;
-    const areaName = `${account.screenName}'s home`;
-    const areaKey = `rr${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
-    
-    const bundleFolder = `./data/area/bundle/${areaId}`;
-    await fs.mkdir(bundleFolder, { recursive: true });
-    const bundlePath = `${bundleFolder}/${areaKey}.json`;
-    await fs.writeFile(bundlePath, JSON.stringify({ thingDefinitions: [], serveTime: 0 }, null, 2));
-    
-    const subareaPath = `./data/area/subareas/${areaId}.json`;
-    await fs.writeFile(subareaPath, JSON.stringify({ subareas: [] }, null, 2));
-
-    const areaInfo = {
-      editors: [{ id: account.personId, name: account.screenName, isOwner: true }],
-      listEditors: [],
-      copiedFromAreas: [],
-      name: areaName,
-      creationDate: new Date().toISOString(),
-      totalVisitors: 0,
-      isZeroGravity: false,
-      hasFloatingDust: false,
-      isCopyable: false,
-      isExcluded: false,
-      renameCount: 0,
-      copiedCount: 0,
-      isFavorited: false
-    };
-
-    const areaLoad = {
-      ok: true,
-      areaId,
-      areaName,
-      areaKey,
-      areaCreatorId: account.personId,
-      isPrivate: false,
-      isZeroGravity: false,
-      hasFloatingDust: false,
-      isCopyable: false,
-      onlyOwnerSetsLocks: false,
-      isExcluded: false,
-      environmentChangersJSON: JSON.stringify({ environmentChangers: [] }),
-      requestorIsEditor: true,
-      requestorIsListEditor: true,
-      requestorIsOwner: true,
-      placements: [
-        {
-          Id: crypto.randomUUID().replace(/-/g, "").slice(0, 24),
-          Tid: "000000000000000000000001",
-          P: { x: 0, y: -0.3, z: 0 },
-          R: { x: 0, y: 0, z: 0 }
-        }
-      ],
-      serveTime: 17
-    };
-
-    const areaBundle = { thingDefinitions: [], serveTime: 3 };
-
-    await fs.writeFile(`./data/area/info/${areaId}.json`, JSON.stringify(areaInfo, null, 2));
-    await fs.writeFile(`./data/area/load/${areaId}.json`, JSON.stringify(areaLoad, null, 2));
-    await fs.writeFile(`./data/area/bundle/${areaId}.json`, JSON.stringify(areaBundle, null, 2));
-
-    // Add to area list
-    await injectInitialAreaToList(areaId, areaName);
-    console.log(`🌍 [PROFILE] Created home area for ${account.screenName}`);
+    console.log(`[PROFILE] Creating home area for ${account.screenName}`);
   }
-  
-  return { accountData: account, isNew };
+
+  const areaId = account.homeAreaId;
+  const areaName = `${account.screenName}'s home`;
+  const areaKey = `rr${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
+
+  const bundleFolder = `./data/area/bundle/${areaId}`;
+  await fs.mkdir(bundleFolder, { recursive: true });
+  const bundlePath = `${bundleFolder}/${areaKey}.json`;
+  await fs.writeFile(bundlePath, JSON.stringify({ thingDefinitions: [], serveTime: 0 }, null, 2));
+  const subareaPath = `./data/area/subareas/${areaId}.json`;
+  await fs.writeFile(subareaPath, JSON.stringify({ subareas: [] }, null, 2));
+
+  const areaInfo = {
+    editors: [
+      {
+        id: account.personId,
+        name: account.screenName,
+        isOwner: true
+      }
+    ],
+    listEditors: [],
+    copiedFromAreas: [],
+    name: areaName,
+    creationDate: new Date().toISOString(),
+    totalVisitors: 0,
+    isZeroGravity: false,
+    hasFloatingDust: false,
+    isCopyable: false,
+    isExcluded: false,
+    renameCount: 0,
+    copiedCount: 0,
+    isFavorited: false
+  };
+
+  const areaLoad = {
+    ok: true,
+    areaId,
+    areaName,
+    areaKey,
+    areaCreatorId: account.personId,
+    isPrivate: false,
+    isZeroGravity: false,
+    hasFloatingDust: false,
+    isCopyable: false,
+    onlyOwnerSetsLocks: false,
+    isExcluded: false,
+    environmentChangersJSON: JSON.stringify({ environmentChangers: [] }),
+    requestorIsEditor: true,
+    requestorIsListEditor: true,
+    requestorIsOwner: true,
+    placements: [
+      {
+        Id: crypto.randomUUID().replace(/-/g, "").slice(0, 24),
+        Tid: "000000000000000000000001",
+        P: { x: 0, y: -0.3, z: 0 },
+        R: { x: 0, y: 0, z: 0 }
+      }
+    ],
+    serveTime: 17
+  };
+
+  const areaBundle = {
+    thingDefinitions: [],
+    serveTime: 3
+  };
+
+  await fs.mkdir(`./data/area/info`, { recursive: true });
+  await fs.mkdir(`./data/area/load`, { recursive: true });
+  await fs.mkdir(`./data/area/bundle`, { recursive: true });
+
+  await fs.writeFile(`./data/area/info/${areaId}.json`, JSON.stringify(areaInfo, null, 2));
+  await fs.writeFile(`./data/area/load/${areaId}.json`, JSON.stringify(areaLoad, null, 2));
+  await fs.writeFile(`./data/area/bundle/${areaId}.json`, JSON.stringify(areaBundle, null, 2));
+
+  console.log(`🌍 Created default home area for ${account.screenName}`);
 }
 
-await initServer()
+async function setupClientProfile(profileName: string): Promise<Record<string, any>> {
+  let accountData = await loadAccountData(profileName);
+  if (!accountData) {
+    accountData = await createProfileAccount(profileName);
+  } else {
+    await ensurePersonInfo(accountData);
+    await ensureHomeArea(accountData);
+  }
+  return accountData;
+}
+
+async function ensureProfileAccount(profileName: string): Promise<void> {
+  await fs.mkdir(ACCOUNTS_DIR, { recursive: true });
+  try {
+    await fs.access(getAccountPathForProfile(profileName));
+  } catch {
+    await createProfileAccount(profileName);
+  }
+}
+
+async function loadProfileIntoLegacy(profileName: string): Promise<void> {
+  await ensureProfileAccount(profileName);
+  const profilePath = getAccountPathForProfile(profileName);
+  const data = await fs.readFile(profilePath, "utf-8");
+  await fs.mkdir(path.dirname(LEGACY_ACCOUNT_PATH), { recursive: true });
+  await fs.writeFile(LEGACY_ACCOUNT_PATH, data);
+}
+
+async function persistLegacyToProfile(profileName: string): Promise<void> {
+  const profilePath = getAccountPathForProfile(profileName);
+  await fs.mkdir(ACCOUNTS_DIR, { recursive: true });
+  const data = await fs.readFile(LEGACY_ACCOUNT_PATH, "utf-8");
+  await fs.writeFile(profilePath, data);
+}
+
+const pendingClients: Array<{ id: string; resolve: (profile: string) => void; timestamp: Date }> = [];
+let pendingClientCounter = 0;
+const requestProfileMap = new WeakMap<Request, { profileName: string; release: () => void }>();
+
+async function releaseProfileLock(request: Request) {
+  const entry = requestProfileMap.get(request);
+  if (!entry) return;
+  try {
+    await persistLegacyToProfile(entry.profileName);
+  } catch (error) {
+    console.error("[PROFILE] Failed to persist profile data:", error);
+  } finally {
+    entry.release();
+    requestProfileMap.delete(request);
+  }
+}
+
+await initDefaults()
 
 const areaIndex: { name: string, description?: string, id: string, playerCount: number }[] = [];
 const areaByUrlName = new Map<string, string>()
@@ -646,11 +579,33 @@ const findAreaByUrlName = (areaUrlName: string) => {
   return areaByUrlName.get(areaUrlName)
 }
 
-// Note: Home areas are created per-profile when clients connect via /auth/start
+// ✅ Inject default home area into arealist.json if not already present
+try {
+  const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+  const personId = account.personId;
+  const personName = account.screenName;
+  const defaultAreaId = account.homeAreaId;
+  const defaultAreaName = `${personName}'s home`;
+
+  const listPath = "./data/area/arealist.json";
+  let alreadyExists = false;
+
+  try {
+    const areaList = await Bun.file(listPath).json();
+    alreadyExists = areaList.created?.some((a: any) => a.id === defaultAreaId);
+  } catch { }
+
+  if (!alreadyExists) {
+    await injectInitialAreaToList(defaultAreaId, defaultAreaName);
+    console.log(`✅ Injected default area "${defaultAreaName}" into arealist.json`);
+  }
+} catch {
+  console.warn("⚠️ Could not inject default area: account.json missing or invalid.");
+}
 
 
 const app = new Elysia()
-  .onRequest(({ request }) => {
+  .onRequest(async ({ request, cookie }) => {
     console.info(JSON.stringify({
       ts: new Date().toISOString(),
       ip: request.headers.get('X-Real-Ip'),
@@ -658,8 +613,24 @@ const app = new Elysia()
       method: request.method,
       url: request.url,
     }));
+
+    const profileName = getProfileFromCookie(cookie);
+    if (!profileName) return;
+
+    const release = await profileSwapMutex.lock();
+    try {
+      await loadProfileIntoLegacy(profileName);
+      requestProfileMap.set(request, { profileName, release });
+    } catch (err) {
+      release();
+      throw err;
+    }
   })
-  .onError(({ code, error, request }) => {
+  .onAfterHandle(async ({ request }) => {
+    await releaseProfileLock(request);
+  })
+  .onError(async ({ code, error, request }) => {
+    await releaseProfileLock(request);
     console.info("error in middleware!", request.url, code);
     console.log(error);
   })
@@ -668,289 +639,158 @@ const app = new Elysia()
     console.log(request.method, path, { body, params })
   })
 
-  // ============== ADMIN PANEL ==============
-  // Web interface to assign profiles to connecting clients
   .get("/admin", async () => {
     const profiles = await listProfiles();
-    const activeSessions = sessionManager.getActiveSessions();
-    
+    const pendingHtml = pendingClients.length
+      ? pendingClients.map((client) => `
+        <div class="client-item">
+          <div>
+            <div><strong>Waiting Client</strong></div>
+            <div class="meta">ID: ${client.id} · Since ${client.timestamp.toLocaleTimeString()}</div>
+          </div>
+          <form class="assign-form" action="/admin/assign" method="GET">
+            <input type="hidden" name="clientId" value="${client.id}" />
+            <select name="profile">
+              <option value="">Select profile</option>
+              ${profiles.map((p) => `<option value="${p}">${p}</option>`).join("")}
+            </select>
+            <span>or</span>
+            <input type="text" name="newProfile" placeholder="New name" />
+            <button type="submit">Assign</button>
+          </form>
+        </div>
+      `).join("")
+      : `<div class="empty">No clients waiting. Start a client to see it here.</div>`;
+
+    const profileList = profiles.length
+      ? profiles.map((p) => `<span class="profile-tag">${p}</span>`).join("")
+      : `<div class="empty">No profiles yet.</div>`;
+
     const html = `<!DOCTYPE html>
 <html>
 <head>
-  <title>Echoland Admin - Profile Assignment</title>
+  <title>Echoland Admin</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: 'Segoe UI', system-ui, sans-serif;
-      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
-      min-height: 100vh;
-      color: #e8e8e8;
-      padding: 40px 20px;
-    }
-    .container { max-width: 800px; margin: 0 auto; }
-    h1 {
-      text-align: center;
-      font-size: 2em;
-      margin-bottom: 10px;
-      background: linear-gradient(90deg, #ff6b6b, #ffd93d);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-    .subtitle { text-align: center; color: #888; margin-bottom: 30px; }
-    .card {
-      background: rgba(255,255,255,0.05);
-      border-radius: 16px;
-      padding: 24px;
-      margin-bottom: 20px;
-      border: 1px solid rgba(255,255,255,0.1);
-    }
-    .card h2 { font-size: 1.2em; margin-bottom: 16px; color: #ffd93d; }
-    .pending { background: rgba(255, 107, 107, 0.2); border-color: rgba(255, 107, 107, 0.5); }
-    .pending h2 { color: #ff6b6b; }
-    .client-item {
-      display: flex; justify-content: space-between; align-items: center;
-      padding: 16px; margin-bottom: 12px;
-      background: rgba(0,0,0,0.3); border-radius: 8px;
-    }
-    .client-info { flex: 1; }
-    .client-id { font-size: 0.85em; color: #888; }
+    body { font-family: Arial, sans-serif; background: #0f141c; color: #e0e6f0; margin: 0; padding: 30px; }
+    .container { max-width: 900px; margin: 0 auto; }
+    h1 { margin-bottom: 20px; }
+    .card { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+    .client-item { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+    .client-item:last-child { border-bottom: none; }
     .assign-form { display: flex; gap: 8px; align-items: center; }
-    select, input[type="text"] {
-      padding: 8px 12px; border-radius: 6px;
-      border: 1px solid rgba(255,255,255,0.2);
-      background: rgba(0,0,0,0.5); color: #fff;
-    }
-    button {
-      padding: 8px 16px; border-radius: 6px; border: none;
-      background: linear-gradient(90deg, #00d4ff, #7b2cbf);
-      color: #fff; font-weight: 600; cursor: pointer;
-    }
-    button:hover { transform: translateY(-1px); }
-    .no-pending {
-      text-align: center; padding: 40px; color: #888;
-      font-style: italic;
-    }
-    .online-list { display: flex; flex-wrap: wrap; gap: 10px; }
-    .online-player {
-      display: flex; align-items: center; gap: 8px;
-      background: rgba(0,255,136,0.1); padding: 8px 16px;
-      border-radius: 20px; border: 1px solid rgba(0,255,136,0.3);
-    }
-    .dot { width: 8px; height: 8px; background: #00ff88; border-radius: 50%; }
-    .profile-list { display: flex; flex-wrap: wrap; gap: 8px; }
-    .profile-tag {
-      background: rgba(255,255,255,0.1); padding: 6px 12px;
-      border-radius: 15px; font-size: 0.9em;
-    }
-    .refresh-note { text-align: center; color: #666; font-size: 0.85em; margin-top: 20px; }
+    select, input[type="text"] { padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.3); color: #fff; }
+    button { padding: 8px 16px; border: none; border-radius: 6px; background: #2f89ff; color: white; cursor: pointer; }
+    button:hover { background: #1d6adf; }
+    .profile-tag { display: inline-block; padding: 6px 12px; background: rgba(255,255,255,0.1); margin: 4px; border-radius: 12px; }
+    .empty { color: #8a93a6; font-style: italic; }
+    form.inline { display: flex; gap: 8px; margin-top: 12px; }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>Echoland Admin</h1>
-    <p class="subtitle">Profile Assignment Panel</p>
-    
-    <div class="card pending">
-      <h2>Waiting Clients (${pendingClients.length})</h2>
-      ${pendingClients.length > 0 ? pendingClients.map(c => `
-        <div class="client-item">
-          <div class="client-info">
-            <div>New Client</div>
-            <div class="client-id">ID: ${c.id} | Waiting since: ${c.timestamp.toLocaleTimeString()}</div>
-          </div>
-          <form class="assign-form" action="/admin/assign" method="GET">
-            <input type="hidden" name="clientId" value="${c.id}">
-            <select name="profile">
-              <option value="">-- Select Profile --</option>
-              ${profiles.map(p => `<option value="${p}">${p}</option>`).join('')}
-            </select>
-            <span>or</span>
-            <input type="text" name="newProfile" placeholder="New name" style="width:120px">
-            <button type="submit">Assign</button>
-          </form>
-        </div>
-      `).join('') : '<div class="no-pending">No clients waiting. Start your Anyland clients!</div>'}
-    </div>
-    
     <div class="card">
-      <h2>Online Players (${activeSessions.length})</h2>
-      ${activeSessions.length > 0 ? `
-        <div class="online-list">
-          ${activeSessions.map(s => `
-            <div class="online-player">
-              <span class="dot"></span>
-              <span>${s.screenName}</span>
-            </div>
-          `).join('')}
-        </div>
-      ` : '<div class="no-pending">No players online yet.</div>'}
+      <h2>Pending Clients (${pendingClients.length})</h2>
+      ${pendingHtml}
     </div>
-    
     <div class="card">
-      <h2>Available Profiles (${profiles.length})</h2>
-      ${profiles.length > 0 ? `
-        <div class="profile-list">
-          ${profiles.map(p => `<span class="profile-tag">${p}</span>`).join('')}
-        </div>
-      ` : '<div class="no-pending">No profiles created yet.</div>'}
-      <form action="/admin/create-profile" method="GET" style="margin-top:16px;display:flex;gap:8px;">
-        <input type="text" name="name" placeholder="Create new profile...">
+      <h2>Profiles (${profiles.length})</h2>
+      <div>${profileList}</div>
+      <form class="inline" action="/admin/create-profile" method="GET">
+        <input type="text" name="name" placeholder="New profile name" required />
         <button type="submit">Create</button>
       </form>
     </div>
-    
-    <p class="refresh-note">Refresh the page to see updates</p>
   </div>
 </body>
 </html>`;
-    
     return new Response(html, { headers: { "Content-Type": "text/html" } });
   })
-
-  // Assign a profile to a waiting client
   .get("/admin/assign", async ({ query }) => {
     const clientId = query.clientId;
-    let profileName = query.profile || query.newProfile?.trim();
-    
-    if (!clientId) {
+    let profileName = (query.profile || query.newProfile || "").trim();
+    if (!clientId || !profileName) {
       return Response.redirect("/admin", 302);
     }
-    
-    // Find the pending client
-    const clientIndex = pendingClients.findIndex(c => c.id === clientId);
-    if (clientIndex === -1) {
+    const idx = pendingClients.findIndex((c) => c.id === clientId);
+    if (idx === -1) {
       return Response.redirect("/admin", 302);
     }
-    
-    // Generate random if no profile specified
-    if (!profileName) {
-      profileName = generateRandomUsername();
-    }
-    
-    // Check if profile exists, create if not
-    const profiles = await listProfiles();
-    if (!profiles.includes(profileName)) {
-      await createNewProfile(profileName);
-    }
-    
-    // Resolve the pending client's promise
-    const client = pendingClients.splice(clientIndex, 1)[0];
+    await setupClientProfile(profileName);
+    const client = pendingClients.splice(idx, 1)[0];
     client.resolve(profileName);
-    
-    console.log(`✅ [ADMIN] Assigned profile "${profileName}" to client ${clientId}`);
-    
+    console.log(`[ADMIN] Assigned profile ${profileName} to ${clientId}`);
     return Response.redirect("/admin", 302);
+  }, {
+    query: t.Object({
+      clientId: t.String(),
+      profile: t.Optional(t.String()),
+      newProfile: t.Optional(t.String())
+    })
   })
-
-  // Create a new profile from admin panel
   .get("/admin/create-profile", async ({ query }) => {
-    let profileName = query.name?.trim();
-    
-    if (profileName) {
-      const profiles = await listProfiles();
-      if (!profiles.includes(profileName)) {
-        await createNewProfile(profileName);
-        console.log(`✅ [ADMIN] Created profile "${profileName}"`);
-      }
+    const name = (query.name || "").trim();
+    if (name) {
+      await setupClientProfile(name);
+      console.log(`[ADMIN] Created profile ${name}`);
     }
-    
     return Response.redirect("/admin", 302);
+  }, {
+    query: t.Object({
+      name: t.Optional(t.String())
+    })
   })
-
-  // API to list profiles (for tools/scripts)
   .get("/api/profiles", async () => {
     const profiles = await listProfiles();
-    const activeSessions = sessionManager.getActiveSessions();
-    return {
-      profiles,
-      activePlayers: activeSessions.map(s => ({
-        name: s.screenName,
-        profile: s.profileName,
-        connectedAt: s.connectedAt
-      }))
-    };
+    return new Response(JSON.stringify({ profiles }), {
+      headers: { "Content-Type": "application/json" }
+    });
   })
+
 
   .post(
     "/auth/start",
-    async ({ cookie: { ast, profile }, request, body }) => {
-      // Get profile name from multiple sources (in priority order):
-      // 1. X-Profile header
-      // 2. ?profile= query param
-      // 3. request body
-      // 4. Existing session (reconnecting client)
-      // 5. Interactive prompt (admin chooses)
-      
-      let profileName = request.headers.get("X-Profile");
-      if (!profileName) {
-        const url = new URL(request.url);
-        profileName = url.searchParams.get("profile");
-      }
-      if (!profileName && body && typeof body === 'object' && 'profile' in body) {
-        profileName = (body as any).profile;
-      }
-      
-      // Check if this client already has a session (reconnecting)
-      if (!profileName && ast?.value) {
-        const existingSession = sessionManager.getSession(ast.value);
-        if (existingSession) {
-          profileName = existingSession.profileName;
-          console.log(`[AUTH] Reconnecting client, using existing profile: ${profileName}`);
-        }
-      }
-      
-      // Check DEFAULT_PROFILE env var
-      if (!profileName && DEFAULT_PROFILE) {
-        profileName = DEFAULT_PROFILE;
-        console.log(`[AUTH] Using default profile: ${profileName}`);
-      }
-      
-      // If still no profile, add to pending queue and wait for admin to assign via web panel
+    async ({ cookie, request, body }) => {
+      const { ast } = cookie;
+
+      let profileName =
+        request.headers.get("X-Profile") ||
+        (request.url ? new URL(request.url).searchParams.get("profile") : null) ||
+        (body && typeof body === "object" && "profile" in body ? (body as any).profile : null) ||
+        cookie[ACTIVE_PROFILE_COOKIE]?.value ||
+        null;
+
       if (!profileName) {
         const clientId = `client-${++pendingClientCounter}`;
-        console.log(`\n🎮 [AUTH] New client connecting! Waiting for admin to assign profile...`);
-        console.log(`   👉 Open http://localhost:8000/admin to assign a profile\n`);
-        
-        // Add to pending queue and wait for admin to assign via /admin page
+        console.log(`[AUTH] New client awaiting profile selection (client ${clientId})`);
         profileName = await new Promise<string>((resolve) => {
           pendingClients.push({ id: clientId, resolve, timestamp: new Date() });
         });
       }
-      
-      // Setup/load the profile (creates if new)
-      const { accountData: account, isNew } = await setupClientProfile(profileName);
-      
-      // Create session for this client
-      const sessionToken = sessionManager.createSession(profileName, account);
+
+      const account = await setupClientProfile(profileName);
+      await fs.mkdir(path.dirname(LEGACY_ACCOUNT_PATH), { recursive: true });
+      await fs.writeFile(LEGACY_ACCOUNT_PATH, JSON.stringify(account, null, 2));
+      await persistLegacyToProfile(profileName);
+
+      const sessionToken = `s:${generateObjectId()}`;
       ast.value = sessionToken;
       ast.httpOnly = true;
-      
-      // Also set profile name directly in cookie (simpler lookup for other endpoints)
-      profile.value = profileName;
-      profile.httpOnly = true;
-      
-      if (isNew) {
-        console.log(`[AUTH] 🆕 New player joined: ${profileName}`);
-      } else {
-        console.log(`[AUTH] 👋 Player connected: ${profileName}`);
-      }
-      
-      // Log active sessions
-      console.log(`[AUTH] Active players: ${sessionManager.getActiveCount()}`);
 
-      // Extract hands from attachments for separate fields
-      const attachmentsObj = typeof account.attachments === "string" 
-        ? JSON.parse(account.attachments || "{}") 
+      const profileCookie = cookie[ACTIVE_PROFILE_COOKIE] ?? (cookie[ACTIVE_PROFILE_COOKIE] = { value: "", httpOnly: true });
+      profileCookie.value = profileName;
+      profileCookie.httpOnly = true;
+
+      const attachmentsObj = typeof account.attachments === "string"
+        ? JSON.parse(account.attachments || "{}")
         : (account.attachments ?? {});
-      
-      console.log("[AUTH] Current attachments:", Object.keys(attachmentsObj).map((k: string) => `${k}: ${attachmentsObj[k] ? 'has data' : 'empty'}`).join(', '));
-      
-      // Return attachments from account file
+
+      console.log("[AUTH] Current attachments:", Object.keys(attachmentsObj).map(k => `${k}: ${attachmentsObj[k] ? 'has data' : 'empty'}`).join(', '));
+
       const attachmentsString = typeof account.attachments === "string"
         ? account.attachments
         : JSON.stringify(account.attachments ?? {});
-      
-      // Build response object
+
       const authResponse: any = {
         vMaj: 188,
         vMinSrv: 1,
@@ -968,7 +808,6 @@ const app = new Elysia()
         areaCount: account.ownedAreas?.length || 1,
         thingTagCount: 1,
         allThingsClonable: true,
-        // Include default achievements like Redux server
         achievements: account.achievements || [
           30, 7, 19, 4, 20, 11, 10,
           5, 9, 17, 13, 12, 16, 37,
@@ -981,93 +820,44 @@ const app = new Elysia()
         wasEditToolsTrialEverActivated: true,
         customSearchWords: ''
       };
-      
-      // Include saved hand color if it exists (for persistence across sessions)
+
       if (account.handColor) {
         authResponse.handColor = account.handColor;
         console.log("[AUTH] Returning saved hand color:", account.handColor);
       }
-      
+
+      console.log(`[AUTH] Player connected as ${profileName}`);
       return authResponse;
     },
     {
       cookie: t.Object({
         ast: t.Optional(t.String()),
-        profile: t.Optional(t.String())
+        profile: t.Optional(t.String()),
       }),
       body: t.Optional(t.Object({
         profile: t.Optional(t.String())
       }))
     }
   )
-  // ============== MULTIPLAYER STATUS ENDPOINTS ==============
-  .get("/server/status", async () => {
-    const activeSessions = sessionManager.getActiveSessions();
-    const profiles = await listProfiles();
-    
-    return {
-      ok: true,
-      serverType: "multiplayer",
-      activePlayers: activeSessions.length,
-      players: activeSessions.map(s => ({
-        profileName: s.profileName,
-        screenName: s.screenName,
-        connectedAt: s.connectedAt
-      })),
-      totalProfiles: profiles.length,
-      availableProfiles: profiles
-    };
-  })
-  .get("/server/players", async () => {
-    const activeSessions = sessionManager.getActiveSessions();
-    return {
-      ok: true,
-      count: activeSessions.length,
-      players: activeSessions.map(s => ({
-        profileName: s.profileName,
-        personId: s.personId,
-        screenName: s.screenName,
-        connectedAt: s.connectedAt
-      }))
-    };
-  })
-  .get("/server/profiles", async () => {
-    const profiles = await listProfiles();
-    return {
-      ok: true,
-      count: profiles.length,
-      profiles
-    };
-  })
-  .post("/auth/disconnect", async ({ cookie }) => {
-    // Allow client to disconnect their session
-    if (cookie?.ast?.value) {
-      const session = sessionManager.getSession(cookie.ast.value);
-      if (session) {
-        sessionManager.removeSession(cookie.ast.value);
-        console.log(`[AUTH] 👋 Player disconnected: ${session.profileName}`);
-        return { ok: true, message: `Disconnected ${session.profileName}` };
-      }
-    }
-    return { ok: false, message: "No active session" };
-  })
-  // ============== END MULTIPLAYER STATUS ==============
-  .post("/person/updateattachment", async ({ body, cookie }) => {
+  .post("/person/updateattachment", async ({ body }) => {
     return await accountMutex.runExclusive(async () => {
       console.log("[ATTACHMENT] Received request:", JSON.stringify(body));
       const { id, data, attachments } = body as any;
 
-      // Get account from session
-      const sessionResult = await getAccountFromSession(cookie);
-      if (!sessionResult.account || !sessionResult.profileName) {
-        console.error("[ATTACHMENT] No valid session");
-        return new Response(JSON.stringify({ ok: false, error: "Account read failed - no session" }), {
+      const accountPath = "./data/person/account.json";
+      let accountData: Record<string, any> = {};
+      
+      // Read account data
+      try {
+        const fileContent = await fs.readFile(accountPath, "utf-8");
+        accountData = JSON.parse(fileContent);
+      } catch (e) {
+        console.error("[ATTACHMENT] Failed to read account:", e);
+        return new Response(JSON.stringify({ ok: false, error: "Account read failed" }), {
           status: 500,
           headers: { "Content-Type": "application/json" }
         });
       }
-      const accountPath = getAccountPathForProfile(sessionResult.profileName);
-      let accountData = sessionResult.account;
 
       // Ensure attachments object exists in account
       let currentAttachments: Record<string, any> = {};
@@ -1149,20 +939,20 @@ const app = new Elysia()
     });
   })
   // Set hand color for avatar
-  .post("/person/sethandcolor", async ({ body, cookie }) => {
+  .post("/person/sethandcolor", async ({ body }) => {
     console.log("[HAND COLOR] Received request:", body);
 
-    // Get account from session
-    const sessionResult = await getAccountFromSession(cookie);
-    if (!sessionResult.account || !sessionResult.profileName) {
-      console.error("[HAND COLOR] Failed to read account - no session");
+    const accountPath = "./data/person/account.json";
+    let accountData: Record<string, any> = {};
+    try {
+      accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
+    } catch (e) {
+      console.error("[HAND COLOR] Failed to read account:", e);
       return new Response(JSON.stringify({ ok: false, error: "Account not found" }), {
         status: 404,
         headers: { "Content-Type": "application/json" }
       });
     }
-    const accountPath = getAccountPathForProfile(sessionResult.profileName);
-    let accountData = sessionResult.account;
 
     // Store the hand color data
     const { r, g, b } = body as any;
@@ -1236,14 +1026,17 @@ const app = new Elysia()
     { body: t.Object({ areaId: t.String() }) }
   )
   .post("/area/save",
-    async ({ body, cookie }) => {
+    async ({ body }) => {
       const areaId = body.id || generateObjectId();
       const filePath = `./data/area/load/${areaId}.json`;
 
       await fs.mkdir("./data/area/load", { recursive: true });
-      // Align creator identity with session account
-      const accountInfo = await getAccountSafe(cookie);
-      const creatorId = accountInfo.personId !== "unknown" ? accountInfo.personId : body.creatorId;
+      // Align creator identity with account.json (same as /area route)
+      let creatorId = body.creatorId;
+      try {
+        const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+        if (account?.personId) creatorId = account.personId;
+      } catch { }
       const sanitizedBody = {
         ...body,
         creatorId
@@ -1304,7 +1097,7 @@ const app = new Elysia()
     },
     { body: t.Object({ term: t.String(), byCreatorId: t.Optional(t.String()) }) }
   )
-  .post("/user/setName", async ({ body, cookie }) => {
+  .post("/user/setName", async ({ body }) => {
     const { newName } = body;
 
     if (!newName || typeof newName !== "string" || newName.length < 3) {
@@ -1314,16 +1107,16 @@ const app = new Elysia()
       });
     }
 
-    // Get account from session
-    const sessionResult = await getAccountFromSession(cookie);
-    if (!sessionResult.account || !sessionResult.profileName) {
+    const accountPath = "./data/person/account.json";
+    let accountData: Record<string, any> = {};
+    try {
+      accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
+    } catch {
       return new Response(JSON.stringify({ ok: false, error: "Account not found" }), {
         status: 404,
         headers: { "Content-Type": "application/json" }
       });
     }
-    const accountPath = getAccountPathForProfile(sessionResult.profileName);
-    let accountData = sessionResult.account;
 
     accountData.screenName = newName;
     await fs.writeFile(accountPath, JSON.stringify(accountData, null, 2));
@@ -1357,16 +1150,12 @@ const app = new Elysia()
       totalSearchablePublicAreas: canned_areaList.totalSearchablePublicAreas + dynamic.totalSearchablePublicAreas
     };
   })
-  .get("/repair-home-area", async ({ cookie }) => {
+  .get("/repair-home-area", async () => {
+    const accountPath = "./data/person/account.json";
     const areaBase = "./data/area";
 
     try {
-      // Get account from session
-      const sessionResult = await getAccountFromSession(cookie);
-      if (!sessionResult.account) {
-        return new Response("Account not found - please reconnect", { status: 400 });
-      }
-      const account = sessionResult.account;
+      const account = JSON.parse(await fs.readFile(accountPath, "utf-8"));
       const homeId = account.homeAreaId;
       if (!homeId) return new Response("No homeAreaId found", { status: 400 });
 
@@ -1411,19 +1200,26 @@ const app = new Elysia()
       return new Response("Server error during repair", { status: 500 });
     }
   })
-  .post("/area", async ({ body, cookie }) => {
+  .post("/area", async ({ body }) => {
     const areaName = body?.name;
     if (!areaName || typeof areaName !== "string") {
       return new Response("Missing area name", { status: 400 });
     }
 
-    // Load identity from session account
-    const accountInfo = await getAccountSafe(cookie);
-    const personId = accountInfo.personId;
-    const personName = accountInfo.screenName;
-    
-    if (personId === "unknown") {
-      return new Response("Could not load valid account identity - please reconnect", { status: 500 });
+    // ✅ Load identity from account.json
+    let personId: string;
+    let personName: string;
+
+    try {
+      const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+      personId = account.personId;
+      personName = account.screenName;
+
+      if (!personId || !personName) {
+        throw new Error("Missing personId or screenName in account.json");
+      }
+    } catch {
+      return new Response("Could not load valid account identity", { status: 500 });
     }
 
     const generateId = () => crypto.randomUUID().replace(/-/g, "").slice(0, 24);
@@ -1566,17 +1362,17 @@ const app = new Elysia()
 
     await fs.writeFile(listPath, JSON.stringify(areaList, null, 2));
 
-    // Inject area into account file under ownedAreas
-    if (accountInfo.accountPath && accountInfo.profileName) {
-      try {
-        const accountData = await loadAccountData(accountInfo.profileName);
-        if (accountData) {
-          accountData.ownedAreas = [...new Set([...(accountData.ownedAreas ?? []), areaId])];
-          await saveAccountData(accountInfo.profileName, accountData);
-        }
-      } catch {
-        console.warn("Could not update account file with new owned area.");
-      }
+    // ✅ Inject area into account.json under ownedAreas
+    const accountPath = "./data/person/account.json";
+    try {
+      const accountFile = Bun.file(accountPath);
+      let accountData = await accountFile.json();
+
+      accountData.ownedAreas = [...new Set([...(accountData.ownedAreas ?? []), areaId])];
+
+      await fs.writeFile(accountPath, JSON.stringify(accountData, null, 2));
+    } catch {
+      console.warn("⚠️ Could not update account.json with new owned area.");
     }
 
     return new Response(JSON.stringify({ id: areaId }), {
@@ -1669,16 +1465,21 @@ const app = new Elysia()
     app.routes.find(r => r.path === '/placement/info')!
       .handler({ body: { areaId, placementId } } as any)
   )
-  .post("/placement/new", async ({ body, cookie }) => {
+  .post("/placement/new", async ({ body }) => {
     const { areaId, placement } = body;
     const parsed = JSON.parse(decodeURIComponent(placement));
     const placementId = parsed.Id;
     const placementPath = `./data/placement/info/${areaId}/${placementId}.json`;
 
-    // Inject identity from session account
-    const accountInfo = await getAccountSafe(cookie);
-    parsed.placerId = accountInfo.personId;
-    parsed.placerName = accountInfo.screenName;
+    // Inject identity from account.json
+    try {
+      const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+      parsed.placerId = account.personId || "unknown";
+      parsed.placerName = account.screenName || "anonymous";
+    } catch {
+      parsed.placerId = "unknown";
+      parsed.placerName = "anonymous";
+    }
 
     parsed.placedDaysAgo = 0;
 
@@ -1742,15 +1543,20 @@ const app = new Elysia()
   .get("person/friendsbystr",
     () => canned_friendsbystr
   )
-  .post("/placement/save", async ({ body: { areaId, placementId, data }, cookie }) => {
+  .post("/placement/save", async ({ body: { areaId, placementId, data } }) => {
     if (!areaId || !placementId || !data) {
       console.error("Missing required placement fields");
       return { ok: false, error: "Invalid placement data" };
     }
 
-    const accountInfo = await getAccountSafe(cookie);
-    data.placerId = accountInfo.personId;
-    data.placerName = accountInfo.screenName;
+    try {
+      const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+      data.placerId = account.personId || "unknown";
+      data.placerName = account.screenName || "anonymous";
+    } catch {
+      data.placerId = "unknown";
+      data.placerName = "anonymous";
+    }
 
     const dirPath = path.resolve("./data/placement/info/", areaId);
     await fs.mkdir(dirPath, { recursive: true });
@@ -1802,15 +1608,20 @@ const app = new Elysia()
       placementId: t.String()
     })
   })
-  .post("/placement/update", async ({ body, cookie }) => {
+  .post("/placement/update", async ({ body }) => {
     const { areaId, placement } = body;
     const parsed = JSON.parse(decodeURIComponent(placement));
     const placementId = parsed.Id;
     const placementPath = `./data/placement/info/${areaId}/${placementId}.json`;
 
-    const accountInfo = await getAccountSafe(cookie);
-    parsed.placerId = accountInfo.personId;
-    parsed.placerName = accountInfo.screenName;
+    try {
+      const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+      parsed.placerId = account.personId || "unknown";
+      parsed.placerName = account.screenName || "anonymous";
+    } catch {
+      parsed.placerId = "unknown";
+      parsed.placerName = "anonymous";
+    }
 
     await Bun.write(placementPath, JSON.stringify(parsed, null, 2));
 
@@ -1838,7 +1649,7 @@ const app = new Elysia()
       placement: t.String()
     })
   })
-  .post("/placement/duplicate", async ({ body, cookie }) => {
+  .post("/placement/duplicate", async ({ body }) => {
     const { areaId, placements } = body;
 
     const areaFilePath = `./data/area/load/${areaId}.json`;
@@ -1851,9 +1662,13 @@ const app = new Elysia()
 
     if (!Array.isArray(areaData.placements)) areaData.placements = [];
 
-    const accountInfo = await getAccountSafe(cookie);
-    const personId = accountInfo.personId;
-    const screenName = accountInfo.screenName;
+    let personId = "unknown";
+    let screenName = "anonymous";
+    try {
+      const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+      personId = account.personId || personId;
+      screenName = account.screenName || screenName;
+    } catch { }
 
     const newPlacements = placements.map((encoded: string) => {
       const parsed = JSON.parse(decodeURIComponent(encoded));
@@ -2059,13 +1874,16 @@ const app = new Elysia()
       isFindable: t.Optional(t.Boolean())
     })
   })
-  .get("/inventory/:page", async ({ params, cookie }) => {
+  .get("/inventory/:page", async ({ params }) => {
     const pageParam = params?.page;
     const page = Math.max(0, parseInt(String(pageParam), 10) || 0);
 
-    // Load current user from session
-    const { account, profileName } = await getAccountFromSession(cookie);
-    const personId = account?.personId || "unknown";
+    // Load current user id from account.json
+    let personId = "unknown";
+    try {
+      const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+      personId = account.personId || personId;
+    } catch {}
 
     const invPath = `./data/person/inventory/${personId}.json`;
     let items: string[] = [];
@@ -2077,18 +1895,19 @@ const app = new Elysia()
       }
     } catch {}
 
-    // Prefer inventory stored in account file
+    // Prefer inventory stored in account.json
     let usedPaged = false;
-    if (account?.inventory) {
-      const inv = account.inventory;
-      if (inv.pages && typeof inv.pages === "object") {
+    try {
+      const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+      const inv = account?.inventory;
+      if (inv && inv.pages && typeof inv.pages === "object") {
         const pageItems = inv.pages[String(page)];
         if (Array.isArray(pageItems)) {
           items = pageItems;
           usedPaged = true;
         }
       }
-    }
+    } catch {}
 
     // If using paged store, items already represent this page; otherwise paginate flat list
     const pageSize = 20;
@@ -2102,24 +1921,30 @@ const app = new Elysia()
       headers: { "Content-Type": "application/json" }
     });
   })
-  .post("/inventory/save", async ({ body, cookie }) => {
+  .post("/inventory/save", async ({ body }) => {
     // Accept one of:
     // - { ids: [...] }
     // - { id: "..." }
     // - { page: number|string, inventoryItem: string }  // from client logs
     const invUpdate = body as any;
 
-    // Get account from session
-    const sessionResult = await getAccountFromSession(cookie);
-    if (!sessionResult.account || !sessionResult.profileName) {
-      return new Response(JSON.stringify({ ok: false, error: "Account not found - please reconnect" }), {
+    let personId = "unknown";
+    try {
+      const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+      personId = account.personId || personId;
+    } catch {}
+
+    // Load account.json and embed inventory there
+    const accountPath = "./data/person/account.json";
+    let accountData: Record<string, any> = {};
+    try {
+      accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
+    } catch {
+      return new Response(JSON.stringify({ ok: false, error: "Account not found" }), {
         status: 404,
         headers: { "Content-Type": "application/json" }
       });
     }
-    const personId = sessionResult.account.personId || "unknown";
-    const accountPath = getAccountPathForProfile(sessionResult.profileName);
-    let accountData = sessionResult.account;
 
     let current: { ids?: string[]; pages?: Record<string, any[]> } = accountData.inventory || {};
     if (!current) current = {};
@@ -2161,7 +1986,7 @@ const app = new Elysia()
     body: t.Unknown(),
     type: "form"
   })
-  .post("/inventory/delete", async ({ body, cookie }) => {
+  .post("/inventory/delete", async ({ body }) => {
     // Delete item from inventory: { page: number|string, thingId: string }
     const { page, thingId } = body as any;
 
@@ -2172,17 +1997,22 @@ const app = new Elysia()
       });
     }
 
-    // Get account from session
-    const sessionResult = await getAccountFromSession(cookie);
-    if (!sessionResult.account || !sessionResult.profileName) {
-      return new Response(JSON.stringify({ ok: false, error: "Account not found - please reconnect" }), {
+    let personId = "unknown";
+    try {
+      const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+      personId = account.personId || personId;
+    } catch {}
+
+    const accountPath = "./data/person/account.json";
+    let accountData: Record<string, any> = {};
+    try {
+      accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
+    } catch {
+      return new Response(JSON.stringify({ ok: false, error: "Account not found" }), {
         status: 404,
         headers: { "Content-Type": "application/json" }
       });
     }
-    const personId = sessionResult.account.personId || "unknown";
-    const accountPath = getAccountPathForProfile(sessionResult.profileName);
-    let accountData = sessionResult.account;
 
     let current: { ids?: string[]; pages?: Record<string, any[]> } = accountData.inventory || {};
     if (!current) current = {};
@@ -2225,7 +2055,7 @@ const app = new Elysia()
     }),
     type: "form"
   })
-  .post("/inventory/move", async ({ body, cookie }) => {
+  .post("/inventory/move", async ({ body }) => {
     // Move item within inventory: { fromPage: number|string, fromIndex: number, toPage: number|string, toIndex: number }
     const { fromPage, fromIndex, toPage, toIndex } = body as any;
 
@@ -2236,17 +2066,22 @@ const app = new Elysia()
       });
     }
 
-    // Get account from session
-    const sessionResult = await getAccountFromSession(cookie);
-    if (!sessionResult.account || !sessionResult.profileName) {
-      return new Response(JSON.stringify({ ok: false, error: "Account not found - please reconnect" }), {
+    let personId = "unknown";
+    try {
+      const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+      personId = account.personId || personId;
+    } catch {}
+
+    const accountPath = "./data/person/account.json";
+    let accountData: Record<string, any> = {};
+    try {
+      accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
+    } catch {
+      return new Response(JSON.stringify({ ok: false, error: "Account not found" }), {
         status: 404,
         headers: { "Content-Type": "application/json" }
       });
     }
-    const personId = sessionResult.account.personId || "unknown";
-    const accountPath = getAccountPathForProfile(sessionResult.profileName);
-    let accountData = sessionResult.account;
 
     let current: { ids?: string[]; pages?: Record<string, any[]> } = accountData.inventory || {};
     if (!current) current = {};
@@ -2286,21 +2121,26 @@ const app = new Elysia()
     }),
     type: "form"
   })
-  .post("/inventory/update", async ({ body, cookie }) => {
+  .post("/inventory/update", async ({ body }) => {
     // Mirror /inventory/save behavior; some clients call update
     const invUpdate = body as any;
 
-    // Get account from session
-    const sessionResult = await getAccountFromSession(cookie);
-    if (!sessionResult.account || !sessionResult.profileName) {
-      return new Response(JSON.stringify({ ok: false, error: "Account not found - please reconnect" }), {
+    let personId = "unknown";
+    try {
+      const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+      personId = account.personId || personId;
+    } catch {}
+
+    const accountPath = "./data/person/account.json";
+    let accountData: Record<string, any> = {};
+    try {
+      accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
+    } catch {
+      return new Response(JSON.stringify({ ok: false, error: "Account not found" }), {
         status: 404,
         headers: { "Content-Type": "application/json" }
       });
     }
-    const personId = sessionResult.account.personId || "unknown";
-    const accountPath = getAccountPathForProfile(sessionResult.profileName);
-    let accountData = sessionResult.account;
 
     let current: { ids?: string[]; pages?: Record<string, string[]> } = accountData.inventory || {};
     if (!current) current = {};
@@ -2375,19 +2215,25 @@ const app = new Elysia()
     body: t.Unknown(),
     type: "form"
   })
-  .post("/thing", async ({ body, cookie }) => {
+  .post("/thing", async ({ body }) => {
     const { name = "" } = body;
     const thingId = generateObjectId();
     const infoPath = `./data/thing/info/${thingId}.json`;
     const defPath = `./data/thing/def/${thingId}.json`;
     const tagsPath = `./data/thing/tags/${thingId}.json`;
 
-    // Load identity from session account
-    const accountInfo = await getAccountSafe(cookie);
-    const creatorId = accountInfo.personId;
-    const creatorName = accountInfo.screenName;
+    // ✅ Load identity from account.json
+    let creatorId = "unknown";
+    let creatorName = "anonymous";
+    try {
+      const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+      creatorId = account.personId || creatorId;
+      creatorName = account.screenName || creatorName;
+    } catch (e) {
+      console.warn("⚠️ Could not load account.json for object metadata.", e);
+    }
 
-    // Build thinginfo object
+    // ✅ Build thinginfo object
     const thingInfo = {
       id: thingId,
       name,
@@ -2883,18 +2729,10 @@ const app = new Elysia()
       updates: t.Record(t.String(), t.Any())
     })
   })
-  .post("/thing/topby", async ({ cookie }) => {
+  .post("/thing/topby", async () => {
     // Return top things created by the current user
-    const accountInfo = await getAccountSafe(cookie);
-    const personId = accountInfo.personId;
-    
-    if (personId === "unknown") {
-      return new Response(JSON.stringify({ ids: [] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
-      });
-    }
-    
+    const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+    const personId = account.personId;
     const file = Bun.file(`./data/person/topby/${personId}.json`);
 
     if (await file.exists()) {
