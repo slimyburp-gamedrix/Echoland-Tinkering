@@ -39,12 +39,21 @@ function getAccountPathForProfile(profileName: string): string {
 }
 
 function getProfileFromCookie(cookie?: any): string | null {
-  const cookieValue = cookie?.[ACTIVE_PROFILE_COOKIE]?.value;
+  const decode = (value?: string | null) => {
+    if (typeof value !== "string") return null;
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  };
+
+  const cookieValue = decode(cookie?.[ACTIVE_PROFILE_COOKIE]?.value);
   if (cookieValue) return cookieValue;
 
-  const astToken = cookie?.ast?.value;
-  if (astToken && sessionProfiles.has(astToken)) {
-    return sessionProfiles.get(astToken)!;
+  const astTokenRaw = decode(cookie?.ast?.value);
+  if (astTokenRaw && sessionProfiles.has(astTokenRaw)) {
+    return sessionProfiles.get(astTokenRaw)!;
   }
 
   return null;
