@@ -58,17 +58,22 @@ async function ensureLegacyAccount() {
   }
 }
 
-async function resolveAccountData(cookie?: any): Promise<{ path: string; profileName: string | null; data: Record<string, any> }> {
+async function resolveAccountData(cookie?: any): Promise<{ path: string; profileName: string; data: Record<string, any> }> {
   const profileName = getProfileFromCookie(cookie);
-  if (profileName) {
-    await ensureProfileAccount(profileName);
-    const pathToUse = getAccountPathForProfile(profileName);
-    const data = JSON.parse(await fs.readFile(pathToUse, "utf-8"));
-    return { path: pathToUse, profileName, data };
+  if (!profileName) {
+    throw new Response(JSON.stringify({
+      ok: false,
+      error: "No profile selected. Assign this client to a profile in /admin."
+    }), {
+      status: 428,
+      headers: { "Content-Type": "application/json" }
+    });
   }
-  await ensureLegacyAccount();
-  const legacyData = JSON.parse(await fs.readFile(LEGACY_ACCOUNT_PATH, "utf-8"));
-  return { path: LEGACY_ACCOUNT_PATH, profileName: null, data: legacyData };
+
+  await ensureProfileAccount(profileName);
+  const pathToUse = getAccountPathForProfile(profileName);
+  const data = JSON.parse(await fs.readFile(pathToUse, "utf-8"));
+  return { path: pathToUse, profileName, data };
 }
 
 
