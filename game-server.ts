@@ -28,7 +28,6 @@ class AsyncMutex {
 }
 
 const accountMutex = new AsyncMutex();
-const profileSwapMutex = new AsyncMutex();
 const sessionProfiles = new Map<string, string>();
 
 const ACCOUNTS_DIR = "./data/person/accounts";
@@ -51,8 +50,22 @@ function getProfileFromCookie(cookie?: any): string | null {
   return null;
 }
 
-async function resolveAccountPath(cookie?: any): Promise<string> {
-  return LEGACY_ACCOUNT_PATH;
+async function ensureLegacyAccount() {
+  try {
+    await fs.access(LEGACY_ACCOUNT_PATH);
+  } catch {
+    await initDefaults();
+  }
+}
+
+async function resolveAccountPath(cookie?: any): Promise<{ path: string; profileName: string | null }> {
+  const profileName = getProfileFromCookie(cookie);
+  if (profileName) {
+    await ensureProfileAccount(profileName);
+    return { path: getAccountPathForProfile(profileName), profileName };
+  }
+  await ensureLegacyAccount();
+  return { path: LEGACY_ACCOUNT_PATH, profileName: null };
 }
 
 const HOST = Bun.env.HOST ?? "0.0.0.0";
@@ -466,37 +479,8 @@ async function ensureProfileAccount(profileName: string): Promise<void> {
   }
 }
 
-async function loadProfileIntoLegacy(profileName: string): Promise<void> {
-  await ensureProfileAccount(profileName);
-  const profilePath = getAccountPathForProfile(profileName);
-  const data = await fs.readFile(profilePath, "utf-8");
-  await fs.mkdir(path.dirname(LEGACY_ACCOUNT_PATH), { recursive: true });
-  await fs.writeFile(LEGACY_ACCOUNT_PATH, data);
-}
-
-async function persistLegacyToProfile(profileName: string): Promise<void> {
-  const profilePath = getAccountPathForProfile(profileName);
-  await fs.mkdir(ACCOUNTS_DIR, { recursive: true });
-  const data = await fs.readFile(LEGACY_ACCOUNT_PATH, "utf-8");
-  await fs.writeFile(profilePath, data);
-}
-
 const pendingClients: Array<{ id: string; resolve: (profile: string) => void; timestamp: Date }> = [];
 let pendingClientCounter = 0;
-const requestProfileMap = new WeakMap<Request, { profileName: string; release: () => void }>();
-
-async function releaseProfileLock(request: Request) {
-  const entry = requestProfileMap.get(request);
-  if (!entry) return;
-  try {
-    await persistLegacyToProfile(entry.profileName);
-  } catch (error) {
-    console.error("[PROFILE] Failed to persist profile data:", error);
-  } finally {
-    entry.release();
-    requestProfileMap.delete(request);
-  }
-}
 
 const areaIndex: { name: string, description?: string, id: string, playerCount: number }[] = [];
 const areaByUrlName = new Map<string, string>()
@@ -618,7 +602,7 @@ try {
 
 
 const app = new Elysia()
-  .onRequest(async ({ request, cookie }) => {
+  .onRequest(({ request }) => {
     console.info(JSON.stringify({
       ts: new Date().toISOString(),
       ip: request.headers.get('X-Real-Ip'),
@@ -626,24 +610,8 @@ const app = new Elysia()
       method: request.method,
       url: request.url,
     }));
-
-    const profileName = getProfileFromCookie(cookie);
-    if (!profileName) return;
-
-    const release = await profileSwapMutex.lock();
-    try {
-      await loadProfileIntoLegacy(profileName);
-      requestProfileMap.set(request, { profileName, release });
-    } catch (err) {
-      release();
-      throw err;
-    }
   })
-  .onAfterHandle(async ({ request }) => {
-    await releaseProfileLock(request);
-  })
-  .onError(async ({ code, error, request }) => {
-    await releaseProfileLock(request);
+  .onError(({ code, error, request }) => {
     console.info("error in middleware!", request.url, code);
     console.log(error);
   })
@@ -782,9 +750,9 @@ const app = new Elysia()
       }
 
       const account = await setupClientProfile(profileName);
+      await saveAccountData(profileName, account);
       await fs.mkdir(path.dirname(LEGACY_ACCOUNT_PATH), { recursive: true });
       await fs.writeFile(LEGACY_ACCOUNT_PATH, JSON.stringify(account, null, 2));
-      await persistLegacyToProfile(profileName);
 
       const sessionToken = `s:${generateObjectId()}`;
       ast.value = sessionToken;
@@ -854,7 +822,7 @@ const app = new Elysia()
       console.log("[ATTACHMENT] Received request:", JSON.stringify(body));
       const { id, data, attachments } = body as any;
 
-      const accountPath = await resolveAccountPath(cookie);
+      const { path: accountPath } = await resolveAccountPath(cookie);
       let accountData: Record<string, any> = {};
       
       // Read account data
@@ -952,7 +920,7 @@ const app = new Elysia()
   .post("/person/sethandcolor", async ({ body, cookie }) => {
     console.log("[HAND COLOR] Received request:", body);
 
-    const accountPath = await resolveAccountPath(cookie);
+    const { path: accountPath } = await resolveAccountPath(cookie);
     let accountData: Record<string, any> = {};
     try {
       accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
@@ -1117,7 +1085,7 @@ const app = new Elysia()
       });
     }
 
-    const accountPath = await resolveAccountPath(cookie);
+    const { path: accountPath } = await resolveAccountPath(cookie);
     let accountData: Record<string, any> = {};
     try {
       accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
@@ -1373,7 +1341,7 @@ const app = new Elysia()
     await fs.writeFile(listPath, JSON.stringify(areaList, null, 2));
 
     // ✅ Inject area into account.json under ownedAreas
-    const accountPath = await resolveAccountPath(cookie);
+    const { path: accountPath } = await resolveAccountPath(cookie);
     try {
       const accountFile = Bun.file(accountPath);
       let accountData = await accountFile.json();
@@ -1888,7 +1856,7 @@ const app = new Elysia()
     const pageParam = params?.page;
     const page = Math.max(0, parseInt(String(pageParam), 10) || 0);
 
-    const accountPath = await resolveAccountPath(cookie);
+    const { path: accountPath } = await resolveAccountPath(cookie);
     let account: Record<string, any> = {};
     try {
       account = JSON.parse(await fs.readFile(accountPath, "utf-8"));
@@ -1937,7 +1905,7 @@ const app = new Elysia()
     // - { page: number|string, inventoryItem: string }  // from client logs
     const invUpdate = body as any;
 
-    const accountPath = await resolveAccountPath(cookie);
+    const { path: accountPath } = await resolveAccountPath(cookie);
     let accountData: Record<string, any> = {};
     try {
       accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
@@ -2000,7 +1968,7 @@ const app = new Elysia()
       });
     }
 
-    const accountPath = await resolveAccountPath(cookie);
+    const { path: accountPath } = await resolveAccountPath(cookie);
     let accountData: Record<string, any> = {};
     try {
       accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
@@ -2064,7 +2032,7 @@ const app = new Elysia()
       });
     }
 
-    const accountPath = await resolveAccountPath(cookie);
+    const { path: accountPath } = await resolveAccountPath(cookie);
     let accountData: Record<string, any> = {};
     try {
       accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
@@ -2118,7 +2086,7 @@ const app = new Elysia()
     // Mirror /inventory/save behavior; some clients call update
     const invUpdate = body as any;
 
-    const accountPath = await resolveAccountPath(cookie);
+    const { path: accountPath } = await resolveAccountPath(cookie);
     let accountData: Record<string, any> = {};
     try {
       accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
