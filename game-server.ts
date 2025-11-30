@@ -29,6 +29,7 @@ class AsyncMutex {
 
 const accountMutex = new AsyncMutex();
 const profileSwapMutex = new AsyncMutex();
+const sessionProfiles = new Map<string, string>();
 
 const ACCOUNTS_DIR = "./data/person/accounts";
 const LEGACY_ACCOUNT_PATH = "./data/person/account.json";
@@ -39,7 +40,15 @@ function getAccountPathForProfile(profileName: string): string {
 }
 
 function getProfileFromCookie(cookie?: any): string | null {
-  return cookie?.[ACTIVE_PROFILE_COOKIE]?.value ?? null;
+  const cookieValue = cookie?.[ACTIVE_PROFILE_COOKIE]?.value;
+  if (cookieValue) return cookieValue;
+
+  const astToken = cookie?.ast?.value;
+  if (astToken && sessionProfiles.has(astToken)) {
+    return sessionProfiles.get(astToken)!;
+  }
+
+  return null;
 }
 
 async function resolveAccountPath(cookie?: any): Promise<string> {
@@ -432,6 +441,8 @@ async function ensureHomeArea(account: Record<string, any>) {
   await fs.writeFile(`./data/area/load/${areaId}.json`, JSON.stringify(areaLoad, null, 2));
   await fs.writeFile(`./data/area/bundle/${areaId}.json`, JSON.stringify(areaBundle, null, 2));
 
+  await injectInitialAreaToList(areaId, areaName);
+
   console.log(`🌍 Created default home area for ${account.screenName}`);
 }
 
@@ -778,16 +789,7 @@ const app = new Elysia()
       const sessionToken = `s:${generateObjectId()}`;
       ast.value = sessionToken;
       ast.httpOnly = true;
-
-      const profileCookie = cookie[ACTIVE_PROFILE_COOKIE];
-      if (profileCookie && typeof profileCookie.set === "function") {
-        profileCookie.set({
-          value: profileName,
-          httpOnly: true,
-          sameSite: "lax",
-          path: "/"
-        });
-      }
+      sessionProfiles.set(sessionToken, profileName);
 
       const attachmentsObj = typeof account.attachments === "string"
         ? JSON.parse(account.attachments || "{}")
