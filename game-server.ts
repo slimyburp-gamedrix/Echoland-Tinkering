@@ -163,7 +163,9 @@ async function listProfiles(): Promise<string[]> {
   try {
     await fs.mkdir(ACCOUNTS_DIR, { recursive: true });
     const files = await fs.readdir(ACCOUNTS_DIR);
-    return files.filter((f) => f.endsWith(".json")).map((f) => f.replace(/\.json$/i, ""));
+    return files
+      .filter((f) => f.endsWith(".json"))
+      .map((f) => f.replace(/\.json$/i, ""));
   } catch {
     return [];
   }
@@ -217,7 +219,6 @@ async function ensureHomeArea(account: Record<string, any>) {
   const bundleFolder = `./data/area/bundle/${areaId}`;
   await fs.mkdir(bundleFolder, { recursive: true });
   const bundlePath = `${bundleFolder}/${areaKey}.json`;
-  await fs.writeFile(bundlePath, JSON.stringify({ thingDefinitions: [], serveTime: 0 }, null, 2));
   const subareaPath = `./data/area/subareas/${areaId}.json`;
   await fs.writeFile(subareaPath, JSON.stringify({ subareas: [] }, null, 2));
 
@@ -281,7 +282,7 @@ async function ensureHomeArea(account: Record<string, any>) {
 
   await fs.writeFile(`./data/area/info/${areaId}.json`, JSON.stringify(areaInfo, null, 2));
   await fs.writeFile(`./data/area/load/${areaId}.json`, JSON.stringify(areaLoad, null, 2));
-  await fs.writeFile(`./data/area/bundle/${areaId}.json`, JSON.stringify(areaBundle, null, 2));
+  await fs.writeFile(bundlePath, JSON.stringify(areaBundle, null, 2));
 
   await injectInitialAreaToList(areaId, areaName);
   console.log(`🌍 Created default home area for ${account.screenName}`);
@@ -359,13 +360,14 @@ function shouldBypassProfile(url: URL) {
     || pathname === "/favicon.ico"
     || pathname === "/health"
     || pathname === "/"
-    || pathname === "/auth/start";
+    || pathname === "/auth/start"
+    || pathname.startsWith("/admin/events");
 }
-
 // removed duplicate default imports; using namespace imports declared above
 
 async function initDefaults() {
   const accountPath = "./data/person/account.json";
+
   try {
     await fs.access(accountPath);
     return;
@@ -517,6 +519,7 @@ const app = new Elysia()
   .onRequest(async (context) => {
     const url = new URL(context.request.url);
     if (shouldBypassProfile(url)) return;
+
     const headerCookies = parseCookieHeader(context.request.headers.get("cookie"));
     const profileName = getProfileFromCookies(undefined, headerCookies);
     if (!profileName) {
@@ -731,7 +734,7 @@ const app = new Elysia()
       if (!sessionToken) {
         sessionToken = `s:${generateObjectId()}`;
       }
-      if (!cookie.ast) cookie.ast = {} as any;
+      cookie.ast ??= {} as any;
       cookie.ast.value = sessionToken;
       cookie.ast.httpOnly = true;
       sessionProfiles.set(sessionToken, profileName);
