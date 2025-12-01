@@ -30,6 +30,7 @@ class AsyncMutex {
 const accountMutex = new AsyncMutex();
 const profileSwapMutex = new AsyncMutex();
 const sessionProfiles = new Map<string, string>();
+const textEncoder = new TextEncoder();
 
 const ACCOUNTS_DIR = "./data/person/accounts";
 const LEGACY_ACCOUNT_PATH = "./data/person/account.json";
@@ -504,9 +505,41 @@ async function persistLegacyToProfile(profileName: string): Promise<void> {
   await fs.writeFile(profilePath, data);
 }
 
-const pendingClients: Array<{ id: string; resolve: (profile: string) => void; timestamp: Date }> = [];
+type PendingClient = { id: string; resolve: (profile: string) => void; timestamp: Date };
+const pendingClients: PendingClient[] = [];
 let pendingClientCounter = 0;
 const requestProfileMap = new WeakMap<Request, { profileName: string; release: () => void }>();
+const adminEventClients = new Set<{
+  id: number;
+  controller: ReadableStreamDefaultController<Uint8Array>;
+  heartbeat?: ReturnType<typeof setInterval>;
+}>();
+let adminEventClientCounter = 0;
+
+function removeAdminEventClient(client: {
+  id: number;
+  controller: ReadableStreamDefaultController<Uint8Array>;
+  heartbeat?: ReturnType<typeof setInterval>;
+}) {
+  if (client.heartbeat) clearInterval(client.heartbeat);
+  adminEventClients.delete(client);
+}
+
+function sendAdminEvent(event: string, payload: Record<string, any> = {}) {
+  const message = `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
+  const encoded = textEncoder.encode(message);
+  for (const client of Array.from(adminEventClients)) {
+    try {
+      client.controller.enqueue(encoded);
+    } catch {
+      removeAdminEventClient(client);
+    }
+  }
+}
+
+function notifyPendingChange() {
+  sendAdminEvent("pending", { pending: pendingClients.length });
+}
 
 async function releaseProfileLock(request: Request) {
   const entry = requestProfileMap.get(request);
@@ -739,6 +772,17 @@ const app = new Elysia()
       </form>
     </div>
   </div>
+  <script>
+    (() => {
+      try {
+        const events = new EventSource('/admin/events');
+        const refresh = () => window.location.reload();
+        events.addEventListener('pending', refresh);
+      } catch (err) {
+        console.warn('SSE unavailable', err);
+      }
+    })();
+  </script>
 </body>
 </html>`;
     return new Response(html, { headers: { "Content-Type": "text/html" } });
@@ -756,6 +800,7 @@ const app = new Elysia()
     await setupClientProfile(profileName);
     const client = pendingClients.splice(idx, 1)[0];
     client.resolve(profileName);
+    notifyPendingChange();
     console.log(`[ADMIN] Assigned profile ${profileName} to ${clientId}`);
     return Response.redirect("/admin", 302);
   }, {
@@ -783,12 +828,62 @@ const app = new Elysia()
       headers: { "Content-Type": "application/json" }
     });
   })
+  .get("/admin/events", ({ set }) => {
+    set.headers["Content-Type"] = "text/event-stream";
+    set.headers["Cache-Control"] = "no-cache, no-transform";
+    set.headers["Connection"] = "keep-alive";
+
+    let clientRef: {
+      id: number;
+      controller: ReadableStreamDefaultController<Uint8Array>;
+      heartbeat?: ReturnType<typeof setInterval>;
+    } | null = null;
+
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        clientRef = {
+          id: ++adminEventClientCounter,
+          controller,
+        };
+        clientRef.heartbeat = setInterval(() => {
+          try {
+            controller.enqueue(textEncoder.encode(`event: ping\ndata: {}\n\n`));
+          } catch {
+            if (clientRef) {
+              removeAdminEventClient(clientRef);
+              clientRef = null;
+            }
+          }
+        }, 15000);
+        adminEventClients.add(clientRef);
+        controller.enqueue(textEncoder.encode(`event: connected\ndata: {}\n\n`));
+        controller.enqueue(
+          textEncoder.encode(
+            `event: pending\ndata: ${JSON.stringify({ pending: pendingClients.length })}\n\n`
+          )
+        );
+      },
+      cancel() {
+        if (!clientRef) return;
+        removeAdminEventClient(clientRef);
+        clientRef = null;
+      },
+    });
+
+    return stream;
+  })
 
 
   .post(
     "/auth/start",
     async ({ cookie, request, body }) => {
       const { ast } = cookie;
+      const bodyAst =
+        body && typeof body === "object" && "ast" in body && body.ast != null
+          ? decodeCookieValue(String((body as any).ast))
+          : null;
+      const cookieAst = decodeCookieValue(ast?.value ?? null);
+      const incomingAstToken = bodyAst ?? cookieAst;
 
       let profileName =
         request.headers.get("X-Profile") ||
@@ -797,11 +892,16 @@ const app = new Elysia()
         cookie[ACTIVE_PROFILE_COOKIE]?.value ||
         null;
 
+      if (!profileName && incomingAstToken && sessionProfiles.has(incomingAstToken)) {
+        profileName = sessionProfiles.get(incomingAstToken)!;
+      }
+
       if (!profileName) {
         const clientId = `client-${++pendingClientCounter}`;
         console.log(`[AUTH] New client awaiting profile selection (client ${clientId})`);
         profileName = await new Promise<string>((resolve) => {
           pendingClients.push({ id: clientId, resolve, timestamp: new Date() });
+          notifyPendingChange();
         });
       }
 
@@ -810,10 +910,14 @@ const app = new Elysia()
       await fs.writeFile(LEGACY_ACCOUNT_PATH, JSON.stringify(account, null, 2));
       await persistLegacyToProfile(profileName);
 
-      const sessionToken = `s:${generateObjectId()}`;
-      ast.value = sessionToken;
+      const activeAstToken = incomingAstToken ?? `s:${generateObjectId()}`;
+      ast.value = activeAstToken;
       ast.httpOnly = true;
-      sessionProfiles.set(sessionToken, profileName);
+      ast.path = "/";
+      sessionProfiles.set(activeAstToken, profileName);
+      if (bodyAst) {
+        sessionProfiles.set(bodyAst, profileName);
+      }
       const cookieJar = cookie as Record<string, any>;
       cookieJar[ACTIVE_PROFILE_COOKIE] ??= {};
       cookieJar[ACTIVE_PROFILE_COOKIE].value = profileName;
