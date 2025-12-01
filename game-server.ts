@@ -39,11 +39,34 @@ function getAccountPathForProfile(profileName: string): string {
   return `${ACCOUNTS_DIR}/${profileName}.json`;
 }
 
-function getProfileFromCookie(cookie?: any): string | null {
-  const cookieValue = cookie?.[ACTIVE_PROFILE_COOKIE]?.value;
-  if (cookieValue) return cookieValue;
+function decodeCookieValue(value?: string | null): string | null {
+  if (!value) return null;
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
 
-  const astToken = cookie?.ast?.value;
+function parseCookieHeader(raw?: string | null): Record<string, string> {
+  if (!raw) return {};
+  return raw.split(";").reduce((acc, part) => {
+    const [key, ...rest] = part.trim().split("=");
+    if (!key) return acc;
+    const joined = rest.join("=");
+    const decoded = decodeCookieValue(joined) ?? "";
+    acc[key] = decoded;
+    return acc;
+  }, {} as Record<string, string>);
+}
+
+function getProfileFromCookies(cookieJar?: any, headerJar?: Record<string, string>): string | null {
+  const explicitProfile = decodeCookieValue(
+    cookieJar?.[ACTIVE_PROFILE_COOKIE]?.value ?? headerJar?.[ACTIVE_PROFILE_COOKIE]
+  );
+  if (explicitProfile) return explicitProfile;
+
+  const astToken = decodeCookieValue(cookieJar?.ast?.value ?? headerJar?.ast);
   if (astToken && sessionProfiles.has(astToken)) {
     return sessionProfiles.get(astToken)!;
   }
@@ -627,7 +650,8 @@ const app = new Elysia()
       url: request.url,
     }));
 
-    const profileName = getProfileFromCookie(cookie);
+    const headerCookies = parseCookieHeader(request.headers.get("cookie"));
+    const profileName = getProfileFromCookies(cookie, headerCookies);
     if (!profileName) return;
 
     const release = await profileSwapMutex.lock();
@@ -790,6 +814,11 @@ const app = new Elysia()
       ast.value = sessionToken;
       ast.httpOnly = true;
       sessionProfiles.set(sessionToken, profileName);
+      const cookieJar = cookie as Record<string, any>;
+      cookieJar[ACTIVE_PROFILE_COOKIE] ??= {};
+      cookieJar[ACTIVE_PROFILE_COOKIE].value = profileName;
+      cookieJar[ACTIVE_PROFILE_COOKIE].path = "/";
+      cookieJar[ACTIVE_PROFILE_COOKIE].httpOnly = false;
 
       const attachmentsObj = typeof account.attachments === "string"
         ? JSON.parse(account.attachments || "{}")
