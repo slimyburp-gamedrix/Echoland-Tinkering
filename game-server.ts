@@ -682,9 +682,9 @@ if (thingIndex.length === 0) {
         const raw = await fs.readFile(path.join(infoDir, file), "utf-8");
         const info = JSON.parse(raw);
         
-        // Only index things that are placed and not unlisted
+        // Only index things that are not unlisted (include all, even with placedCount=0)
         if (!info || typeof info !== "object") continue;
-        if (!(info.placedCount > 0) || info.isUnlisted === true) continue;
+        if (info.isUnlisted === true) continue;
         
         const name = typeof info.name === "string" ? info.name.trim().toLowerCase() : "";
         if (!name) continue;
@@ -2733,7 +2733,7 @@ const app = new Elysia()
     }
 
     // ✅ Update thing search index (so new things are immediately searchable)
-    if (name && thingInfo.placedCount > 0 && !thingInfo.isUnlisted) {
+    if (name && !thingInfo.isUnlisted) {
       thingIndex.push({
         id: thingId,
         name: name.trim().toLowerCase(),
@@ -3140,7 +3140,7 @@ const app = new Elysia()
       // Update name in index
       thingEntry.name = updates.name.trim().toLowerCase();
       console.log(`[THING INDEX] ✅ Updated thing ${thingId} name in search index`);
-    } else if (!thingEntry && !thingData.isUnlisted && thingData.placedCount > 0) {
+    } else if (!thingEntry && !thingData.isUnlisted) {
       // Add to index if not there and not unlisted
       thingIndex.push({
         id: thingId,
