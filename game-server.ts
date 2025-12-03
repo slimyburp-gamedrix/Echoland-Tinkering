@@ -339,7 +339,8 @@ async function createProfileAccount(profileName: string): Promise<Record<string,
     personId,
     screenName: profileName,
     homeAreaId,
-    attachments: {}
+    attachments: {},
+    ownedAreas: [homeAreaId] // Include home area in owned areas
   };
   await saveAccountData(profileName, accountData);
   await ensurePersonInfo(accountData);
@@ -1280,9 +1281,37 @@ const app = new Elysia()
   .post("/area/lists", async () => {
     const dynamic = await getDynamicAreaList();
 
+    // Get current profile's owned areas for filtering "created" list
+    let ownedAreaIds: string[] = [];
+    let homeAreaId: string | null = null;
+    
+    if (currentActiveProfile) {
+      try {
+        const accountPath = await getAccountPath();
+        const accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
+        ownedAreaIds = accountData.ownedAreas || [];
+        homeAreaId = accountData.homeAreaId;
+        
+        // Always include home area in owned list
+        if (homeAreaId && !ownedAreaIds.includes(homeAreaId)) {
+          ownedAreaIds.push(homeAreaId);
+        }
+      } catch (e) {
+        console.warn("[AREA LIST] Could not load profile for area filtering:", e);
+      }
+    }
+
+    // Combine all areas for "created" filtering
+    const allCreated = [...canned_areaList.created, ...dynamic.created];
+    
+    // Filter "created" to only show areas owned by current profile
+    const userCreated = ownedAreaIds.length > 0
+      ? allCreated.filter((area: any) => ownedAreaIds.includes(area.id))
+      : []; // Empty if no profile or no owned areas
+
     return {
       visited: [...canned_areaList.visited, ...dynamic.visited],
-      created: [...canned_areaList.created, ...dynamic.created],
+      created: userCreated,
       newest: [...canned_areaList.newest, ...dynamic.newest],
       popular: [...canned_areaList.popular, ...dynamic.popular],
       popular_rnd: [...canned_areaList.popular_rnd, ...dynamic.popular_rnd],
@@ -1518,6 +1547,11 @@ const app = new Elysia()
       accountData.ownedAreas = [...new Set([...(accountData.ownedAreas ?? []), areaId])];
 
       await fs.writeFile(accountPath, JSON.stringify(accountData, null, 2));
+      
+      // Persist to profile file
+      if (currentActiveProfile) {
+        await syncLegacyToProfile(currentActiveProfile);
+      }
     } catch {
       console.warn("⚠️ Could not update account.json with new owned area.");
     }
