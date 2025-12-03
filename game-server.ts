@@ -2766,6 +2766,7 @@ const app = new Elysia()
     }
 
     const defPath = `./data/thing/def/${actualThingId}.json`;
+    const infoPath = `./data/thing/info/${actualThingId}.json`;
     
     try {
       // Parse the definition if it's a string
@@ -2775,6 +2776,36 @@ const app = new Elysia()
       await fs.writeFile(defPath, JSON.stringify(defData, null, 2));
       
       console.log(`✅ Updated thing definition for ${actualThingId}${defData.a ? ` with attributes: ${JSON.stringify(defData.a)}` : ''}`);
+
+      // ✅ Sync name from definition (n) to info file
+      if (defData.n || defData.name) {
+        const newName = defData.n || defData.name;
+        try {
+          const infoData = JSON.parse(await fs.readFile(infoPath, "utf-8"));
+          const oldName = infoData.name;
+          if (oldName !== newName) {
+            infoData.name = newName;
+            await fs.writeFile(infoPath, JSON.stringify(infoData, null, 2));
+            console.log(`✅ Synced thing name from definition: "${oldName}" → "${newName}"`);
+
+            // ✅ Update thing search index with new name
+            const thingEntry = thingIndex.find(t => t.id === actualThingId);
+            if (thingEntry) {
+              thingEntry.name = newName.trim().toLowerCase();
+              console.log(`[THING INDEX] ✅ Updated thing ${actualThingId} name to "${newName}"`);
+            } else if (!infoData.isUnlisted) {
+              thingIndex.push({
+                id: actualThingId,
+                name: newName.trim().toLowerCase(),
+                tags: []
+              });
+              console.log(`[THING INDEX] ✅ Added thing ${actualThingId} (${newName}) to search index`);
+            }
+          }
+        } catch (e) {
+          console.log(`⚠️ Could not sync name to info file: ${e}`);
+        }
+      }
 
       return new Response(JSON.stringify({ ok: true }), {
         status: 200,
@@ -2805,11 +2836,42 @@ const app = new Elysia()
     }
 
     const defPath = `./data/thing/def/${actualThingId}.json`;
+    const infoPath = `./data/thing/info/${actualThingId}.json`;
     
     try {
       const defData = typeof actualDefinition === "string" ? JSON.parse(actualDefinition) : actualDefinition;
       await fs.writeFile(defPath, JSON.stringify(defData, null, 2));
       console.log(`✅ Saved thing definition for ${actualThingId}${defData.a ? ` with attributes: ${JSON.stringify(defData.a)}` : ''}`);
+
+      // ✅ Sync name from definition (n) to info file
+      if (defData.n || defData.name) {
+        const newName = defData.n || defData.name;
+        try {
+          const infoData = JSON.parse(await fs.readFile(infoPath, "utf-8"));
+          const oldName = infoData.name;
+          if (oldName !== newName) {
+            infoData.name = newName;
+            await fs.writeFile(infoPath, JSON.stringify(infoData, null, 2));
+            console.log(`✅ Synced thing name from definition: "${oldName}" → "${newName}"`);
+
+            // ✅ Update thing search index with new name
+            const thingEntry = thingIndex.find(t => t.id === actualThingId);
+            if (thingEntry) {
+              thingEntry.name = newName.trim().toLowerCase();
+              console.log(`[THING INDEX] ✅ Updated thing ${actualThingId} name to "${newName}"`);
+            } else if (!infoData.isUnlisted) {
+              thingIndex.push({
+                id: actualThingId,
+                name: newName.trim().toLowerCase(),
+                tags: []
+              });
+              console.log(`[THING INDEX] ✅ Added thing ${actualThingId} (${newName}) to search index`);
+            }
+          }
+        } catch (e) {
+          console.log(`⚠️ Could not sync name to info file: ${e}`);
+        }
+      }
 
       return new Response(JSON.stringify({ ok: true }), {
         status: 200,
