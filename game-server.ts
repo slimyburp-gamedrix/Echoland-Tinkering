@@ -686,8 +686,8 @@ if (thingIndex.length === 0) {
         if (!info || typeof info !== "object") continue;
         if (info.isUnlisted === true) continue;
         
-        const name = typeof info.name === "string" ? info.name.trim().toLowerCase() : "";
-        if (!name) continue;
+        // Use "thing" as default name if none provided
+        const name = typeof info.name === "string" && info.name.trim() ? info.name.trim().toLowerCase() : "thing";
         
         // Try to get tags
         let tags: string[] = [];
