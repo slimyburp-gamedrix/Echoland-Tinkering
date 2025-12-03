@@ -2813,7 +2813,9 @@ const app = new Elysia()
   .post("/thing/search", async ({ body }) => {
     console.log("📥 /thing/search route triggered");
 
-    const searchTerm = typeof body.query === "string" ? body.query.trim().toLowerCase() : "";
+    // Client sends "term" field, not "query"
+    const searchTerm = typeof body.term === "string" ? body.term.trim().toLowerCase() : 
+                       (typeof body.query === "string" ? body.query.trim().toLowerCase() : "");
     const page = typeof body.page === "number" ? Math.max(0, body.page) : 0;
     const itemsPerPage = 20;
 
