@@ -1565,13 +1565,25 @@ const app = new Elysia()
     type: "form"
   })
 	.post("/area/updatesettings", async ({ body }) => {
-		const { areaId, environmentChanger } = body;
+		const { 
+			areaId, 
+			environmentChanger, 
+			environmentType,
+			isZeroGravity,
+			hasFloatingDust,
+			isCopyable,
+			onlyOwnerSetsLocks,
+			isPrivate,
+			isExcluded
+		} = body as any;
 		
 		if (!areaId || typeof areaId !== "string") {
 			return new Response("Missing areaId", { status: 400 });
 		}
 		
 		const loadPath = `./data/area/load/${areaId}.json`;
+		const infoPath = `./data/area/info/${areaId}.json`;
+		
 		try {
 			const loadFile = Bun.file(loadPath);
 			if (!await loadFile.exists()) {
@@ -1579,6 +1591,7 @@ const app = new Elysia()
 			}
 			
 			const areaData = await loadFile.json();
+			let updated = false;
 			
 			// Update environmentChangersJSON if provided
 			if (environmentChanger) {
@@ -1595,14 +1608,95 @@ const app = new Elysia()
 					}
 					
 					areaData.environmentChangersJSON = JSON.stringify(currentChangers);
+					updated = true;
+					console.log(`[AREA SETTINGS] Updated environmentChanger for ${areaId}`);
 				} catch (parseError) {
 					console.error("Error parsing environmentChanger JSON:", parseError);
 					return new Response("Invalid environmentChanger JSON", { status: 400 });
 				}
 			}
 			
-			// Write updated data back
-			await Bun.write(loadPath, JSON.stringify(areaData, null, 2));
+			// Update environment type (Snow, Rain, etc.)
+			if (environmentType !== undefined) {
+				// Add environment type to the changers
+				const currentChangers = JSON.parse(areaData.environmentChangersJSON || '{"environmentChangers":[]}');
+				
+				// Find or create the environment type entry
+				const existingIndex = currentChangers.environmentChangers.findIndex((c: any) => c.Name === "environmentType");
+				const envEntry = { Name: "environmentType", Type: environmentType };
+				
+				if (existingIndex >= 0) {
+					currentChangers.environmentChangers[existingIndex] = envEntry;
+				} else {
+					currentChangers.environmentChangers.push(envEntry);
+				}
+				
+				areaData.environmentChangersJSON = JSON.stringify(currentChangers);
+				areaData.environmentType = environmentType;
+				updated = true;
+				console.log(`[AREA SETTINGS] Updated environmentType to ${environmentType} for ${areaId}`);
+			}
+			
+			// Update boolean settings
+			if (isZeroGravity !== undefined) {
+				areaData.isZeroGravity = isZeroGravity === "True" || isZeroGravity === true;
+				updated = true;
+				console.log(`[AREA SETTINGS] Updated isZeroGravity to ${areaData.isZeroGravity} for ${areaId}`);
+			}
+			
+			if (hasFloatingDust !== undefined) {
+				areaData.hasFloatingDust = hasFloatingDust === "True" || hasFloatingDust === true;
+				updated = true;
+				console.log(`[AREA SETTINGS] Updated hasFloatingDust to ${areaData.hasFloatingDust} for ${areaId}`);
+			}
+			
+			if (isCopyable !== undefined) {
+				areaData.isCopyable = isCopyable === "True" || isCopyable === true;
+				updated = true;
+				console.log(`[AREA SETTINGS] Updated isCopyable to ${areaData.isCopyable} for ${areaId}`);
+			}
+			
+			if (onlyOwnerSetsLocks !== undefined) {
+				areaData.onlyOwnerSetsLocks = onlyOwnerSetsLocks === "True" || onlyOwnerSetsLocks === true;
+				updated = true;
+				console.log(`[AREA SETTINGS] Updated onlyOwnerSetsLocks to ${areaData.onlyOwnerSetsLocks} for ${areaId}`);
+			}
+			
+			if (isPrivate !== undefined) {
+				areaData.isPrivate = isPrivate === "True" || isPrivate === true;
+				updated = true;
+				console.log(`[AREA SETTINGS] Updated isPrivate to ${areaData.isPrivate} for ${areaId}`);
+			}
+			
+			if (isExcluded !== undefined) {
+				areaData.isExcluded = isExcluded === "True" || isExcluded === true;
+				updated = true;
+				console.log(`[AREA SETTINGS] Updated isExcluded to ${areaData.isExcluded} for ${areaId}`);
+			}
+			
+			// Write updated data back to load file
+			if (updated) {
+				await Bun.write(loadPath, JSON.stringify(areaData, null, 2));
+				
+				// Also update info file if it exists
+				try {
+					const infoFile = Bun.file(infoPath);
+					if (await infoFile.exists()) {
+						const infoData = await infoFile.json();
+						
+						if (isZeroGravity !== undefined) infoData.isZeroGravity = areaData.isZeroGravity;
+						if (hasFloatingDust !== undefined) infoData.hasFloatingDust = areaData.hasFloatingDust;
+						if (isCopyable !== undefined) infoData.isCopyable = areaData.isCopyable;
+						if (isExcluded !== undefined) infoData.isExcluded = areaData.isExcluded;
+						
+						await Bun.write(infoPath, JSON.stringify(infoData, null, 2));
+					}
+				} catch (infoError) {
+					console.warn(`[AREA SETTINGS] Could not update info file for ${areaId}:`, infoError);
+				}
+				
+				console.log(`[AREA SETTINGS] Saved settings for area ${areaId}`);
+			}
 			
 			return new Response(JSON.stringify({ ok: true }), {
 				status: 200,
@@ -1615,8 +1709,16 @@ const app = new Elysia()
 	}, {
 		body: t.Object({
 			areaId: t.String(),
-			environmentChanger: t.Optional(t.String())
-		})
+			environmentChanger: t.Optional(t.String()),
+			environmentType: t.Optional(t.String()),
+			isZeroGravity: t.Optional(t.Union([t.String(), t.Boolean()])),
+			hasFloatingDust: t.Optional(t.Union([t.String(), t.Boolean()])),
+			isCopyable: t.Optional(t.Union([t.String(), t.Boolean()])),
+			onlyOwnerSetsLocks: t.Optional(t.Union([t.String(), t.Boolean()])),
+			isPrivate: t.Optional(t.Union([t.String(), t.Boolean()])),
+			isExcluded: t.Optional(t.Union([t.String(), t.Boolean()]))
+		}),
+		type: "form"
 	})	
   .post("/area/visit", async ({ body }) => {
     const { areaId, name } = body;
