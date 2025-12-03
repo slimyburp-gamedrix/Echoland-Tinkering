@@ -2658,11 +2658,30 @@ const app = new Elysia()
     type: "form"
   })
   .post("/thing", async ({ body }) => {
-    const { name = "" } = body;
     const thingId = generateObjectId();
     const infoPath = `./data/thing/info/${thingId}.json`;
     const defPath = `./data/thing/def/${thingId}.json`;
     const tagsPath = `./data/thing/tags/${thingId}.json`;
+
+    // ✅ Parse the definition from the client
+    let thingDef: Record<string, any> = {};
+    let thingName = "";
+    
+    if (body.definition) {
+      try {
+        thingDef = typeof body.definition === "string" ? JSON.parse(body.definition) : body.definition;
+        // Extract name from definition (stored as "n" in the definition)
+        thingName = thingDef.n || thingDef.name || "";
+        console.log(`📦 Parsed thing definition with name: "${thingName}"`);
+      } catch (e) {
+        console.warn("⚠️ Could not parse thing definition:", e);
+      }
+    }
+    
+    // Fall back to body.name if no name in definition
+    if (!thingName && body.name) {
+      thingName = body.name;
+    }
 
     // ✅ Load identity from account.json
     let creatorId = "unknown";
@@ -2678,7 +2697,7 @@ const app = new Elysia()
     // ✅ Build thinginfo object
     const thingInfo = {
       id: thingId,
-      name,
+      name: thingName,
       creatorId,
       creatorName,
       createdDaysAgo: 0,
@@ -2686,13 +2705,6 @@ const app = new Elysia()
       placedCount: 1,
       allCreatorsThingsClonable: true,
       isUnlisted: false
-    };
-
-    // ✅ Build thingdef object (3D object data)
-    const thingDef = {
-      name,
-      // Empty 3D object data - will be populated when user builds the object
-      // This matches the structure from the example def file
     };
 
     // ✅ Build thingtags object
@@ -2709,7 +2721,7 @@ const app = new Elysia()
     await fs.writeFile(defPath, JSON.stringify(thingDef, null, 2));
     await fs.writeFile(tagsPath, JSON.stringify(thingTags, null, 2));
 
-    console.log(`✅ Created thing ${thingId} with info, def, and tags files`);
+    console.log(`✅ Created thing ${thingId} (name: "${thingName}") with info, def, and tags files`);
 
     // Update topby list for the creator
     try {
@@ -2733,14 +2745,13 @@ const app = new Elysia()
     }
 
     // ✅ Update thing search index (so new things are immediately searchable)
-    // Always add to index even with empty name - rename will update it later
     if (!thingInfo.isUnlisted) {
       thingIndex.push({
         id: thingId,
-        name: name ? name.trim().toLowerCase() : "",
+        name: thingName ? thingName.trim().toLowerCase() : "",
         tags: []
       });
-      console.log(`[THING INDEX] ✅ Added thing ${thingId} (${name || "(unnamed)"}) to search index`);
+      console.log(`[THING INDEX] ✅ Added thing ${thingId} (${thingName || "(unnamed)"}) to search index`);
     }
 
     return new Response(JSON.stringify({ id: thingId }), {
