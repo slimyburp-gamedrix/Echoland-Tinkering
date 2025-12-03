@@ -3095,8 +3095,17 @@ const app = new Elysia()
       const data = await fs.readFile(filePath, "utf-8");
       const parsed = JSON.parse(data);
 
+      // Return all thing info fields including name
       return new Response(JSON.stringify({
-        id: parsed.id,
+        id: parsed.id || id,
+        name: parsed.name || "",
+        creatorId: parsed.creatorId,
+        creatorName: parsed.creatorName,
+        createdDaysAgo: parsed.createdDaysAgo || 0,
+        collectedCount: parsed.collectedCount || 0,
+        placedCount: parsed.placedCount || 0,
+        allCreatorsThingsClonable: parsed.allCreatorsThingsClonable ?? true,
+        isUnlisted: parsed.isUnlisted || false,
         vertexCount: parsed.vertexCount,
         createdAt: parsed.createdAt
       }), {
