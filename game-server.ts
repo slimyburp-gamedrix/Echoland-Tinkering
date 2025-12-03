@@ -2947,8 +2947,8 @@ const app = new Elysia()
 
     console.log(`📥 Received query: "${searchTerm}", page: ${page}`);
 
-    // Use cached index for fast search
-    const results = searchThings(searchTerm, page, 20);
+    // Use cached index for fast search (100 results per page, matching inventory limit)
+    const results = searchThings(searchTerm, page, 100);
     
     console.log(`🔎 Found ${results.length} results for "${searchTerm}" (page ${page})`);
 
