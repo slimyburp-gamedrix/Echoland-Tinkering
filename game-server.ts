@@ -888,6 +888,18 @@ const app = new Elysia()
   .onError(async ({ code, error, request }) => {
     console.info("error in middleware!", request.url, code);
     console.log(error);
+    // Return proper JSON for unknown routes so Unity client doesn't crash
+    if (code === 'NOT_FOUND') {
+      console.warn(`[404] Unknown endpoint: ${request.method} ${request.url}`);
+      return new Response(JSON.stringify({ ok: false, error: "Not found" }), {
+        status: 200, // Return 200 so Unity doesn't throw
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    return new Response(JSON.stringify({ ok: false, error: String(error) }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
   })
   .onTransform(({ request, path, body, params }) => {
     // Match Redux server's simple logging
@@ -3543,6 +3555,14 @@ const app = new Elysia()
     { body: t.Object({ userId: t.String() }) }
   )
   .post("/ach/reg", () => {
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  })
+  // Register usage mode - called when client starts
+  .post("/RegisterUsageMode", async ({ body }) => {
+    console.log("[REGISTER USAGE MODE] Request:", body);
     return new Response(JSON.stringify({ ok: true }), {
       status: 200,
       headers: { "Content-Type": "application/json" }
