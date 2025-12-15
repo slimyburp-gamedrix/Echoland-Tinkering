@@ -3090,7 +3090,10 @@ const app = new Elysia()
       });
     } catch {
       console.warn(`⚠️ /thing/info/${params.id} → not found`);
-      return new Response("{}", { status: 404 });
+      return new Response("null", {
+        status: 404,
+        headers: { "Content-Type": "application/json" }
+      });
     }
   })
 
@@ -3106,7 +3109,10 @@ const app = new Elysia()
       });
     } catch {
       console.warn(`⚠️ /thing/def/${params.id} → not found`);
-      return new Response("{}", { status: 404 });
+      return new Response("null", {
+        status: 404,
+        headers: { "Content-Type": "application/json" }
+      });
     }
   })
   .post("/thing/fixmissinginfo", async () => {
