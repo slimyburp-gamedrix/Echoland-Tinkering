@@ -75,6 +75,123 @@ const PORT_CDN_THINGDEFS = Number(Bun.env.PORT_CDN_THINGDEFS ?? 8001);
 const PORT_CDN_AREABUNDLES = Number(Bun.env.PORT_CDN_AREABUNDLES ?? 8002);
 const PORT_CDN_UGCIMAGES = Number(Bun.env.PORT_CDN_UGCIMAGES ?? 8003);
 
+// Helper function to update thing definition in all bundles that contain it
+// This ensures changes to things are visible to all clients
+async function updateThingInAllBundles(thingId: string): Promise<void> {
+  try {
+    const defPath = `./data/thing/def/${thingId}.json`;
+    const defData = await fs.readFile(defPath, "utf-8");
+    const parsedDef = JSON.parse(defData);
+    const compactDef = JSON.stringify(parsedDef);
+    
+    // Scan all area bundles
+    const bundleBaseDir = "./data/area/bundle";
+    try {
+      const areaDirs = await fs.readdir(bundleBaseDir);
+      for (const areaId of areaDirs) {
+        try {
+          const areaDir = `${bundleBaseDir}/${areaId}`;
+          const bundleFiles = await fs.readdir(areaDir);
+          for (const bundleFile of bundleFiles) {
+            if (!bundleFile.endsWith('.json')) continue;
+            
+            const bundlePath = `${areaDir}/${bundleFile}`;
+            const bundleData = JSON.parse(await fs.readFile(bundlePath, "utf-8"));
+            
+            // Check if this bundle contains the thing
+            const thingIndex = bundleData.thingDefinitions?.findIndex((t: any) => t.id === thingId);
+            if (thingIndex !== undefined && thingIndex >= 0) {
+              // Update the definition
+              bundleData.thingDefinitions[thingIndex].def = compactDef;
+              bundleData.serveTime = (bundleData.serveTime || 0) + 1;
+              await fs.writeFile(bundlePath, JSON.stringify(bundleData, null, 2));
+              console.log(`[BUNDLE] Updated thing ${thingId} in bundle for area ${areaId}`);
+              
+              // Also update the area load file serveTime
+              try {
+                const areaLoadPath = `./data/area/load/${areaId}.json`;
+                const areaData = JSON.parse(await fs.readFile(areaLoadPath, "utf-8"));
+                areaData.serveTime = (areaData.serveTime || 0) + 1;
+                await fs.writeFile(areaLoadPath, JSON.stringify(areaData, null, 2));
+              } catch { }
+            }
+          }
+        } catch { }
+      }
+    } catch { }
+  } catch (e) {
+    console.error(`[BUNDLE] Error updating thing ${thingId} in bundles:`, e);
+  }
+}
+
+// Helper function to update area bundle with thing definitions
+// This ensures clients can see placements by including thing definitions in the bundle
+async function updateAreaBundle(areaId: string, thingIds: string[]): Promise<void> {
+  try {
+    // Get area load file to find the areaKey
+    const areaLoadPath = `./data/area/load/${areaId}.json`;
+    const areaData = JSON.parse(await fs.readFile(areaLoadPath, "utf-8"));
+    const areaKey = areaData.areaKey;
+    
+    if (!areaKey) {
+      console.warn(`[BUNDLE] No areaKey found for area ${areaId}`);
+      return;
+    }
+    
+    // Read current bundle
+    const bundlePath = `./data/area/bundle/${areaId}/${areaKey}.json`;
+    let bundleData: { thingDefinitions: { id: string; def: string }[]; serveTime: number } = {
+      thingDefinitions: [],
+      serveTime: 0
+    };
+    
+    try {
+      bundleData = JSON.parse(await fs.readFile(bundlePath, "utf-8"));
+    } catch {
+      // Bundle doesn't exist, start fresh
+    }
+    
+    // Get existing thing IDs in the bundle
+    const existingThingIds = new Set(bundleData.thingDefinitions.map(t => t.id));
+    
+    // Add missing thing definitions
+    for (const thingId of thingIds) {
+      if (!thingId || existingThingIds.has(thingId)) continue;
+      
+      try {
+        const defPath = `./data/thing/def/${thingId}.json`;
+        const defData = await fs.readFile(defPath, "utf-8");
+        
+        // Bundle stores definitions as compact stringified JSON (no whitespace)
+        // Parse and re-stringify to ensure compact format
+        const parsedDef = JSON.parse(defData);
+        bundleData.thingDefinitions.push({
+          id: thingId,
+          def: JSON.stringify(parsedDef)
+        });
+        existingThingIds.add(thingId);
+        console.log(`[BUNDLE] Added thing ${thingId} to area ${areaId} bundle`);
+      } catch (e) {
+        console.warn(`[BUNDLE] Could not load thing definition ${thingId}:`, e);
+      }
+    }
+    
+    // Increment serveTime so clients know to refresh
+    bundleData.serveTime = (bundleData.serveTime || 0) + 1;
+    
+    // Also update serveTime in the area load file
+    areaData.serveTime = (areaData.serveTime || 0) + 1;
+    await fs.writeFile(areaLoadPath, JSON.stringify(areaData, null, 2));
+    
+    // Write updated bundle
+    await fs.mkdir(`./data/area/bundle/${areaId}`, { recursive: true });
+    await fs.writeFile(bundlePath, JSON.stringify(bundleData, null, 2));
+    console.log(`[BUNDLE] Updated bundle for area ${areaId}, serveTime: ${bundleData.serveTime}`);
+  } catch (e) {
+    console.error(`[BUNDLE] Error updating bundle for area ${areaId}:`, e);
+  }
+}
+
 const getDynamicAreaList = async () => {
   const arealistPath = "/app/data/area/arealist.json";
   try {
@@ -1835,7 +1952,23 @@ const app = new Elysia()
 			
 			// Write updated data back to load file
 			if (updated) {
+				// Increment serveTime so clients know the area changed
+				areaData.serveTime = (areaData.serveTime || 0) + 1;
 				await Bun.write(loadPath, JSON.stringify(areaData, null, 2));
+				
+				// Also update bundle serveTime
+				try {
+					const areaKey = areaData.areaKey;
+					if (areaKey) {
+						const bundlePath = `./data/area/bundle/${areaId}/${areaKey}.json`;
+						const bundleFile = Bun.file(bundlePath);
+						if (await bundleFile.exists()) {
+							const bundleData = await bundleFile.json();
+							bundleData.serveTime = (bundleData.serveTime || 0) + 1;
+							await Bun.write(bundlePath, JSON.stringify(bundleData, null, 2));
+						}
+					}
+				} catch { }
 				
 				// Also update info file if it exists
 				try {
@@ -1854,10 +1987,22 @@ const app = new Elysia()
 					console.warn(`[AREA SETTINGS] Could not update info file for ${areaId}:`, infoError);
 				}
 				
-				console.log(`[AREA SETTINGS] Saved settings for area ${areaId}`);
+				console.log(`[AREA SETTINGS] Saved settings for area ${areaId}, serveTime: ${areaData.serveTime}`);
 			}
 			
-			return new Response(JSON.stringify({ ok: true }), {
+			// Return the updated settings so client can broadcast via PUN
+			return new Response(JSON.stringify({ 
+				ok: true,
+				areaId,
+				isZeroGravity: areaData.isZeroGravity,
+				hasFloatingDust: areaData.hasFloatingDust,
+				isCopyable: areaData.isCopyable,
+				onlyOwnerSetsLocks: areaData.onlyOwnerSetsLocks,
+				isPrivate: areaData.isPrivate,
+				isExcluded: areaData.isExcluded,
+				_environmentType: areaData._environmentType,
+				environmentChangersJSON: areaData.environmentChangersJSON
+			}), {
 				status: 200,
 				headers: { "Content-Type": "application/json" }
 			});
@@ -1913,20 +2058,35 @@ const app = new Elysia()
     const placementId = parsed.Id;
     const placementPath = `./data/placement/info/${areaId}/${placementId}.json`;
 
-    // Inject identity from account.json
+    // Build placement info (goes to separate info file)
+    let placerId = "unknown";
+    let placerName = "anonymous";
     try {
       const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
-      parsed.placerId = account.personId || "unknown";
-      parsed.placerName = account.screenName || "anonymous";
-    } catch {
-      parsed.placerId = "unknown";
-      parsed.placerName = "anonymous";
-    }
+      placerId = account.personId || "unknown";
+      placerName = account.screenName || "anonymous";
+    } catch { }
 
-    parsed.placedDaysAgo = 0;
-
+    // Save placement info to separate file
+    const placementInfo = {
+      placerId,
+      placerName,
+      placedDaysAgo: 0
+    };
     await fs.mkdir(`./data/placement/info/${areaId}`, { recursive: true });
-    await Bun.write(placementPath, JSON.stringify(parsed, null, 2));
+    await Bun.write(placementPath, JSON.stringify(placementInfo, null, 2));
+
+    // Build minimal placement for area load file (only Id, Tid, P, R, S, A, D)
+    const areaPlacement: Record<string, any> = {
+      Id: parsed.Id,
+      Tid: parsed.Tid,
+      P: parsed.P,
+      R: parsed.R
+    };
+    // Include optional fields if present
+    if (parsed.S) areaPlacement.S = parsed.S;
+    if (parsed.A) areaPlacement.A = parsed.A;
+    if (parsed.D) areaPlacement.D = parsed.D;
 
     const areaFilePath = `./data/area/load/${areaId}.json`;
     let areaData: Record<string, any> = {};
@@ -1939,11 +2099,20 @@ const app = new Elysia()
     if (!Array.isArray(areaData.placements)) areaData.placements = [];
 
     areaData.placements = areaData.placements.filter(p => p.Id !== placementId);
-    areaData.placements.push(parsed);
+    areaData.placements.push(areaPlacement);
 
     await fs.writeFile(areaFilePath, JSON.stringify(areaData, null, 2));
 
-    return new Response(JSON.stringify({ ok: true }), {
+    // Update area bundle with the thing definition so other clients can see it
+    if (parsed.Tid) {
+      await updateAreaBundle(areaId, [parsed.Tid]);
+    }
+
+    // Return the placement data so client can broadcast it via PUN
+    return new Response(JSON.stringify({ 
+      ok: true,
+      placement: areaPlacement
+    }), {
       status: 200,
       headers: { "Content-Type": "application/json" }
     });
@@ -2038,7 +2207,21 @@ const app = new Elysia()
       (p: any) => p.Id !== placementId
     );
 
+    // Increment serveTime so clients know the area changed
+    areaData.serveTime = (areaData.serveTime || 0) + 1;
+
     await fs.writeFile(areaFilePath, JSON.stringify(areaData, null, 2));
+
+    // Also update bundle serveTime
+    try {
+      const areaKey = areaData.areaKey;
+      if (areaKey) {
+        const bundlePath = `./data/area/bundle/${areaId}/${areaKey}.json`;
+        const bundleData = JSON.parse(await fs.readFile(bundlePath, "utf-8"));
+        bundleData.serveTime = (bundleData.serveTime || 0) + 1;
+        await fs.writeFile(bundlePath, JSON.stringify(bundleData, null, 2));
+      }
+    } catch { }
 
     return new Response(JSON.stringify({ ok: true }), {
       status: 200,
@@ -2056,16 +2239,36 @@ const app = new Elysia()
     const placementId = parsed.Id;
     const placementPath = `./data/placement/info/${areaId}/${placementId}.json`;
 
+    // Update placement info file
+    let placerId = "unknown";
+    let placerName = "anonymous";
     try {
       const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
-      parsed.placerId = account.personId || "unknown";
-      parsed.placerName = account.screenName || "anonymous";
-    } catch {
-      parsed.placerId = "unknown";
-      parsed.placerName = "anonymous";
-    }
+      placerId = account.personId || "unknown";
+      placerName = account.screenName || "anonymous";
+    } catch { }
 
-    await Bun.write(placementPath, JSON.stringify(parsed, null, 2));
+    // Try to preserve existing placedDaysAgo from previous info
+    let placedDaysAgo = 0;
+    try {
+      const existingInfo = JSON.parse(await fs.readFile(placementPath, "utf-8"));
+      placedDaysAgo = existingInfo.placedDaysAgo || 0;
+    } catch { }
+
+    const placementInfo = { placerId, placerName, placedDaysAgo };
+    await fs.mkdir(`./data/placement/info/${areaId}`, { recursive: true });
+    await Bun.write(placementPath, JSON.stringify(placementInfo, null, 2));
+
+    // Build minimal placement for area load file (only Id, Tid, P, R, S, A, D)
+    const areaPlacement: Record<string, any> = {
+      Id: parsed.Id,
+      Tid: parsed.Tid,
+      P: parsed.P,
+      R: parsed.R
+    };
+    if (parsed.S) areaPlacement.S = parsed.S;
+    if (parsed.A) areaPlacement.A = parsed.A;
+    if (parsed.D) areaPlacement.D = parsed.D;
 
     const areaFilePath = `./data/area/load/${areaId}.json`;
     let areaData: Record<string, any> = {};
@@ -2077,11 +2280,20 @@ const app = new Elysia()
 
     if (!Array.isArray(areaData.placements)) areaData.placements = [];
     areaData.placements = areaData.placements.filter(p => p.Id !== placementId);
-    areaData.placements.push(parsed);
+    areaData.placements.push(areaPlacement);
 
     await fs.writeFile(areaFilePath, JSON.stringify(areaData, null, 2));
 
-    return new Response(JSON.stringify({ ok: true }), {
+    // Update area bundle with the thing definition so other clients can see it
+    if (parsed.Tid) {
+      await updateAreaBundle(areaId, [parsed.Tid]);
+    }
+
+    // Return the placement data so client can broadcast it via PUN
+    return new Response(JSON.stringify({ 
+      ok: true,
+      placement: areaPlacement
+    }), {
       status: 200,
       headers: { "Content-Type": "application/json" }
     });
@@ -2112,30 +2324,37 @@ const app = new Elysia()
       screenName = account.screenName || screenName;
     } catch { }
 
-    const newPlacements = placements.map((encoded: string) => {
+    // Process placements - separate area data from info data
+    const areaPlacements: Record<string, any>[] = [];
+    
+    for (const encoded of placements) {
       const parsed = JSON.parse(decodeURIComponent(encoded));
-      return {
+      
+      // Build minimal placement for area load file
+      const areaPlacement: Record<string, any> = {
         Id: parsed.Id,
         Tid: parsed.Tid,
         P: parsed.P,
-        R: parsed.R,
-        S: parsed.S || { x: 1, y: 1, z: 1 },
-        A: parsed.A || [],
-        D: parsed.D || {},
+        R: parsed.R
+      };
+      if (parsed.S) areaPlacement.S = parsed.S;
+      if (parsed.A) areaPlacement.A = parsed.A;
+      if (parsed.D) areaPlacement.D = parsed.D;
+      areaPlacements.push(areaPlacement);
+      
+      // Save placement info to separate file
+      const placementInfo = {
         placerId: personId,
         placerName: screenName,
         placedDaysAgo: 0
       };
-    });
-
-    for (const placement of newPlacements) {
-      const placementPath = `./data/placement/info/${areaId}/${placement.Id}.json`;
+      const placementPath = `./data/placement/info/${areaId}/${parsed.Id}.json`;
       await fs.mkdir(`./data/placement/info/${areaId}`, { recursive: true });
-      await Bun.write(placementPath, JSON.stringify(placement, null, 2));
+      await Bun.write(placementPath, JSON.stringify(placementInfo, null, 2));
     }
 
     const existingIds = new Set(areaData.placements.map((p: any) => p.Id));
-    for (const placement of newPlacements) {
+    for (const placement of areaPlacements) {
       if (!existingIds.has(placement.Id)) {
         areaData.placements.push(placement);
       }
@@ -2143,7 +2362,13 @@ const app = new Elysia()
 
     await fs.writeFile(areaFilePath, JSON.stringify(areaData, null, 2));
 
-    return new Response(JSON.stringify({ ok: true, count: newPlacements.length }), {
+    // Update area bundle with all thing definitions so other clients can see them
+    const thingIds = areaPlacements.map((p: any) => p.Tid).filter(Boolean);
+    if (thingIds.length > 0) {
+      await updateAreaBundle(areaId, thingIds);
+    }
+
+    return new Response(JSON.stringify({ ok: true, count: areaPlacements.length }), {
       status: 200,
       headers: { "Content-Type": "application/json" }
     });
@@ -2231,8 +2456,21 @@ const app = new Elysia()
           const placementIndex = areaData.placements.findIndex((p: any) => p.Id === placementId);
           if (placementIndex !== -1) {
             areaData.placements[placementIndex].A = placementData.A;
+            // Increment serveTime so clients know the area changed
+            areaData.serveTime = (areaData.serveTime || 0) + 1;
             await fs.writeFile(areaFilePath, JSON.stringify(areaData, null, 2));
-            console.log("[SETATTR] Updated area load file");
+            console.log("[SETATTR] Updated area load file, serveTime:", areaData.serveTime);
+            
+            // Also update bundle serveTime
+            try {
+              const areaKey = areaData.areaKey;
+              if (areaKey) {
+                const bundlePath = `./data/area/bundle/${areaId}/${areaKey}.json`;
+                const bundleData = JSON.parse(await fs.readFile(bundlePath, "utf-8"));
+                bundleData.serveTime = (bundleData.serveTime || 0) + 1;
+                await fs.writeFile(bundlePath, JSON.stringify(bundleData, null, 2));
+              }
+            } catch { }
           }
         }
       } catch (e) {
@@ -2816,6 +3054,9 @@ const app = new Elysia()
         }
       }
 
+      // Update all area bundles that contain this thing so other clients see the changes
+      await updateThingInAllBundles(actualThingId);
+
       return new Response(JSON.stringify({ ok: true }), {
         status: 200,
         headers: { "Content-Type": "application/json" }
@@ -2881,6 +3122,9 @@ const app = new Elysia()
           console.log(`⚠️ Could not sync name to info file: ${e}`);
         }
       }
+
+      // Update all area bundles that contain this thing so other clients see the changes
+      await updateThingInAllBundles(actualThingId);
 
       return new Response(JSON.stringify({ ok: true }), {
         status: 200,
@@ -2999,6 +3243,9 @@ const app = new Elysia()
         console.log(`[THING INDEX] ✅ Added thing ${thingId} (${newName}) to search index after rename`);
       }
 
+      // Update all area bundles that contain this thing so other clients see the changes
+      await updateThingInAllBundles(thingId);
+
       return new Response(JSON.stringify({ ok: true, name: newName }), {
         status: 200,
         headers: { "Content-Type": "application/json" }
@@ -3114,12 +3361,13 @@ const app = new Elysia()
     });
   })
   .post("/thing/definition", async ({ body: { id } }) => {
-    const filePath = `./data/thing/info/${id}.json`;
+    // Thing definitions are stored in the def folder, not info folder
+    const filePath = `./data/thing/def/${id}.json`;
 
     try {
       const data = await fs.readFile(filePath, "utf-8");
-      const parsed = JSON.parse(data);
-      return new Response(JSON.stringify(parsed.definition), {
+      // Return the definition directly (it's already the definition JSON)
+      return new Response(data, {
         status: 200,
         headers: { "Content-Type": "application/json" }
       });
@@ -3133,12 +3381,13 @@ const app = new Elysia()
     body: t.Object({ id: t.String() })
   })
   .post("/thing/definitionAreaBundle", async ({ body: { id } }) => {
-    const filePath = `./data/thing/info/${id}.json`;
+    // Thing definitions are stored in the def folder, not info folder
+    const filePath = `./data/thing/def/${id}.json`;
 
     try {
       const data = await fs.readFile(filePath, "utf-8");
-      const parsed = JSON.parse(data);
-      return new Response(JSON.stringify(parsed.definition), {
+      // Return the definition directly (it's already the definition JSON)
+      return new Response(data, {
         status: 200,
         headers: { "Content-Type": "application/json" }
       });
@@ -3164,22 +3413,8 @@ const app = new Elysia()
 
     try {
       const data = await fs.readFile(filePath, "utf-8");
-      const parsed = JSON.parse(data);
-
-      // Return all thing info fields including name
-      return new Response(JSON.stringify({
-        id: parsed.id || id,
-        name: parsed.name || "",
-        creatorId: parsed.creatorId,
-        creatorName: parsed.creatorName,
-        createdDaysAgo: parsed.createdDaysAgo || 0,
-        collectedCount: parsed.collectedCount || 0,
-        placedCount: parsed.placedCount || 0,
-        allCreatorsThingsClonable: parsed.allCreatorsThingsClonable ?? true,
-        isUnlisted: parsed.isUnlisted || false,
-        vertexCount: parsed.vertexCount,
-        createdAt: parsed.createdAt
-      }), {
+      // Return the info file contents directly
+      return new Response(data, {
         status: 200,
         headers: { "Content-Type": "application/json" }
       });
