@@ -470,6 +470,15 @@ async function ensureHomeArea(account: Record<string, any>) {
   console.log(`🌍 Created default home area for ${account.screenName}`);
 }
 
+// Helper function to get current active profile's account data
+async function getCurrentProfileAccount(): Promise<Record<string, any> | null> {
+  if (!currentActiveProfile) {
+    console.warn("⚠️ No active profile set, cannot load account data");
+    return null;
+  }
+  return await loadAccountData(currentActiveProfile);
+}
+
 async function setupClientProfile(profileName: string): Promise<Record<string, any>> {
   let accountData = await loadAccountData(profileName);
   if (!accountData) {
@@ -1340,10 +1349,10 @@ const app = new Elysia()
       const filePath = `./data/area/load/${areaId}.json`;
 
       await fs.mkdir("./data/area/load", { recursive: true });
-      // Align creator identity with account.json (same as /area route)
+      // Align creator identity with current profile account (same as /area route)
       let creatorId = body.creatorId;
       try {
-        const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+        const account = await getCurrentProfileAccount();
         if (account?.personId) creatorId = account.personId;
       } catch { }
       const sanitizedBody = {
@@ -1543,17 +1552,20 @@ const app = new Elysia()
       return new Response("Missing area name", { status: 400 });
     }
 
-    // ✅ Load identity from account.json
+    // ✅ Load identity from current profile account
     let personId: string;
     let personName: string;
 
     try {
-      const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+      const account = await getCurrentProfileAccount();
+      if (!account) {
+        throw new Error("No active profile account found");
+      }
       personId = account.personId;
       personName = account.screenName;
 
       if (!personId || !personName) {
-        throw new Error("Missing personId or screenName in account.json");
+        throw new Error("Missing personId or screenName in profile account");
       }
     } catch {
       return new Response("Could not load valid account identity", { status: 500 });
@@ -1913,11 +1925,16 @@ const app = new Elysia()
     const placementId = parsed.Id;
     const placementPath = `./data/placement/info/${areaId}/${placementId}.json`;
 
-    // Inject identity from account.json
+    // Inject identity from current profile account
     try {
-      const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
-      parsed.placerId = account.personId || "unknown";
-      parsed.placerName = account.screenName || "anonymous";
+      const account = await getCurrentProfileAccount();
+      if (account) {
+        parsed.placerId = account.personId || "unknown";
+        parsed.placerName = account.screenName || "anonymous";
+      } else {
+        parsed.placerId = "unknown";
+        parsed.placerName = "anonymous";
+      }
     } catch {
       parsed.placerId = "unknown";
       parsed.placerName = "anonymous";
@@ -1992,9 +2009,14 @@ const app = new Elysia()
     }
 
     try {
-      const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
-      data.placerId = account.personId || "unknown";
-      data.placerName = account.screenName || "anonymous";
+      const account = await getCurrentProfileAccount();
+      if (account) {
+        data.placerId = account.personId || "unknown";
+        data.placerName = account.screenName || "anonymous";
+      } else {
+        data.placerId = "unknown";
+        data.placerName = "anonymous";
+      }
     } catch {
       data.placerId = "unknown";
       data.placerName = "anonymous";
@@ -2057,9 +2079,14 @@ const app = new Elysia()
     const placementPath = `./data/placement/info/${areaId}/${placementId}.json`;
 
     try {
-      const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
-      parsed.placerId = account.personId || "unknown";
-      parsed.placerName = account.screenName || "anonymous";
+      const account = await getCurrentProfileAccount();
+      if (account) {
+        parsed.placerId = account.personId || "unknown";
+        parsed.placerName = account.screenName || "anonymous";
+      } else {
+        parsed.placerId = "unknown";
+        parsed.placerName = "anonymous";
+      }
     } catch {
       parsed.placerId = "unknown";
       parsed.placerName = "anonymous";
@@ -2107,9 +2134,11 @@ const app = new Elysia()
     let personId = "unknown";
     let screenName = "anonymous";
     try {
-      const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
-      personId = account.personId || personId;
-      screenName = account.screenName || screenName;
+      const account = await getCurrentProfileAccount();
+      if (account) {
+        personId = account.personId || personId;
+        screenName = account.screenName || screenName;
+      }
     } catch { }
 
     const newPlacements = placements.map((encoded: string) => {
@@ -2681,15 +2710,19 @@ const app = new Elysia()
       thingName = body.name;
     }
 
-    // ✅ Load identity from account.json
+    // ✅ Load identity from current profile's account
     let creatorId = "unknown";
     let creatorName = "anonymous";
     try {
-      const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
-      creatorId = account.personId || creatorId;
-      creatorName = account.screenName || creatorName;
+      const account = await getCurrentProfileAccount();
+      if (account) {
+        creatorId = account.personId || creatorId;
+        creatorName = account.screenName || creatorName;
+      } else {
+        console.warn("⚠️ No active profile account found for thing creation");
+      }
     } catch (e) {
-      console.warn("⚠️ Could not load account.json for object metadata.", e);
+      console.warn("⚠️ Could not load current profile account for object metadata.", e);
     }
 
     // ✅ Build thinginfo object
@@ -3251,7 +3284,13 @@ const app = new Elysia()
   })
   .post("/thing/topby", async () => {
     // Return top things created by the current user
-    const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+    const account = await getCurrentProfileAccount();
+    if (!account) {
+      return new Response(JSON.stringify({ ids: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
     const personId = account.personId;
     const file = Bun.file(`./data/person/topby/${personId}.json`);
 
