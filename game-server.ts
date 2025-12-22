@@ -3480,7 +3480,7 @@ const app = new Elysia()
     port: PORT_API,
   })
 
-// Watch for changes in area files and rebuild index
+// Watch for changes in area files and update index incrementally
 import { watch } from "fs";
 
 const areaFolder = "./data/area/info/";
@@ -3488,15 +3488,17 @@ let debounceTimer;
 
 try {
   watch(areaFolder, { recursive: true }, (eventType, filename) => {
+    if (!filename || !filename.endsWith('.json')) return; // Only care about JSON files
+
     console.log(`[Area Watcher] Detected ${eventType} on ${filename}`);
 
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(async () => {
-      console.log("[Area Watcher] Rebuilding area index...");
-      await rebuildAreaIndex(); // Make sure this function exists
-    }, 1000); // Wait 1 second after last change
+      const areaId = path.basename(filename, '.json');
+      await updateAreaIndexEntry(areaId, eventType);
+    }, 500); // Reduced debounce time since we're more efficient
   });
-  console.log("[Area Watcher] File watching enabled - area index will auto-rebuild on changes");
+  console.log("[Area Watcher] File watching enabled - area index will update incrementally");
 } catch (error) {
   console.log("[Area Watcher] Recursive file watching not supported on this platform - manual index rebuild required");
   console.log("To rebuild the index manually, restart the server");
@@ -3512,6 +3514,84 @@ async function saveAreaIndexToCache() {
     console.log("✅ Area index saved to cache");
   } catch (error) {
     console.error("❌ Failed to save area index to cache:", error);
+  }
+}
+
+// Function to update a single area index entry
+async function updateAreaIndexEntry(areaId: string, eventType: string) {
+  const cachePath = path.resolve("./cache/areaIndex.json");
+  const filePath = path.resolve("./data/area/info/", `${areaId}.json`);
+
+  try {
+    // Load current index from cache
+    let currentIndex = {};
+    try {
+      const cacheContent = await fs.readFile(cachePath, 'utf-8');
+      currentIndex = JSON.parse(cacheContent);
+    } catch {
+      // Cache doesn't exist or is invalid, start fresh
+      currentIndex = {};
+    }
+
+    if (eventType === 'rename' || eventType === 'change') {
+      // File might have been created/modified
+      try {
+        const content = await fs.readFile(filePath, "utf-8");
+        const areaData = JSON.parse(content);
+
+        currentIndex[areaId] = {
+          areaId,
+          urlName: areaData.urlName || null,
+          creatorId: areaData.creatorId || null,
+          editors: areaData.editors || [],
+          tags: areaData.tags || [],
+          title: areaData.name || null
+        };
+        console.log(`[Area Index] Updated entry for ${areaId}`);
+      } catch (fileError) {
+        // File doesn't exist or is invalid - remove from index
+        delete currentIndex[areaId];
+        console.log(`[Area Index] Removed entry for ${areaId} (file not found/invalid)`);
+      }
+    }
+
+    // Save updated index
+    await fs.writeFile(cachePath, JSON.stringify(currentIndex, null, 2));
+
+    // Update in-memory index if it exists
+    const areaUrlName = areaId.replace(/[^-_a-z0-9]/gi, "").toLowerCase();
+    const existingIndex = areaIndex.findIndex(a => a.id === areaId);
+
+    if (currentIndex[areaId]) {
+      // Area exists, update it
+      if (existingIndex !== -1) {
+        areaIndex[existingIndex] = {
+          name: currentIndex[areaId].title || 'Unnamed',
+          description: '',
+          id: areaId,
+          playerCount: 0
+        };
+      } else {
+        // New area, add it
+        areaIndex.push({
+          name: currentIndex[areaId].title || 'Unnamed',
+          description: '',
+          id: areaId,
+          playerCount: 0
+        });
+      }
+      // Update URL mapping
+      areaByUrlName.set(areaUrlName, areaId);
+    } else {
+      // Area was deleted, remove from memory
+      if (existingIndex !== -1) {
+        areaIndex.splice(existingIndex, 1);
+        areaByUrlName.delete(areaUrlName);
+      }
+    }
+
+  } catch (err) {
+    console.warn(`[Area Index] Failed to update entry for ${areaId}:`, err);
   }
 }
 
