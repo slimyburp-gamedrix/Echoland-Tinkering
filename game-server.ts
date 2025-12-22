@@ -3375,7 +3375,7 @@ import { watch } from "fs";
 
 const areaFolder = "./data/area/info/";
 let debounceTimer;
-let areaIndex = {}; // Keep index in memory
+let areaIndexCache = {}; // Keep index in memory
 
 // Load initial index on startup
 loadAreaIndex().catch(err => console.error("Failed to load initial area index:", err));
@@ -3400,15 +3400,15 @@ async function loadAreaIndex() {
   try {
     const cacheFile = Bun.file(cachePath);
     if (await cacheFile.exists()) {
-      areaIndex = await cacheFile.json();
-      console.log(`[Area Index] Loaded ${Object.keys(areaIndex).length} areas from cache`);
+      areaIndexCache = await cacheFile.json();
+      console.log(`[Area Index] Loaded ${Object.keys(areaIndexCache).length} areas from cache`);
     } else {
       console.log("[Area Index] No cache found, starting with empty index");
-      areaIndex = {};
+      areaIndexCache = {};
     }
   } catch (err) {
     console.error("[Area Index] Failed to load cache, starting fresh:", err);
-    areaIndex = {};
+    areaIndexCache = {};
   }
 }
 
@@ -3424,7 +3424,7 @@ async function updateAreaIndexEntry(areaId: string, eventType: string) {
         const content = await file.text();
         const areaData = JSON.parse(content);
 
-        areaIndex[areaId] = {
+        areaIndexCache[areaId] = {
           areaId,
           urlName: areaData.urlName || null,
           creatorId: areaData.creatorId || null,
@@ -3435,13 +3435,13 @@ async function updateAreaIndexEntry(areaId: string, eventType: string) {
         console.log(`[Area Index] Updated entry for ${areaId}`);
       } else {
         // File was deleted
-        delete areaIndex[areaId];
+        delete areaIndexCache[areaId];
         console.log(`[Area Index] Removed entry for ${areaId}`);
       }
     }
 
     // Save updated index
-    await fs.writeFile(cachePath, JSON.stringify(areaIndex, null, 2));
+    await fs.writeFile(cachePath, JSON.stringify(areaIndexCache, null, 2));
   } catch (err) {
     console.warn(`[Area Index] Failed to update entry for ${areaId}:`, err);
   }
@@ -3481,7 +3481,7 @@ async function rebuildAreaIndex() {
       }
     }
 
-    areaIndex = index; // Update in-memory index
+    areaIndexCache = index; // Update in-memory index
     await fs.writeFile(cachePath, JSON.stringify(index, null, 2));
     console.log(`[Area Index] Rebuilt index with ${Object.keys(index).length} areas`);
   } catch (err) {
