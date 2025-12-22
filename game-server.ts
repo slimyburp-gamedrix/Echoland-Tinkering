@@ -303,6 +303,7 @@ async function initDefaults() {
 
   await fs.writeFile(`./data/area/info/${areaId}.json`, JSON.stringify(areaInfo, null, 2));
   await fs.writeFile(`./data/area/load/${areaId}.json`, JSON.stringify(areaLoad, null, 2));
+  await fs.writeFile(`./data/area/bundle/${areaId}.json`, JSON.stringify(areaBundle, null, 2));
 
   console.log(`🌍 Created default home area for ${accountData.screenName}`);
 }
@@ -453,6 +454,7 @@ async function ensureHomeArea(account: Record<string, any>) {
 
   await fs.writeFile(`./data/area/info/${areaId}.json`, JSON.stringify(areaInfo, null, 2));
   await fs.writeFile(`./data/area/load/${areaId}.json`, JSON.stringify(areaLoad, null, 2));
+  await fs.writeFile(`./data/area/bundle/${areaId}.json`, JSON.stringify(areaBundle, null, 2));
 
   await injectInitialAreaToList(areaId, areaName);
 
