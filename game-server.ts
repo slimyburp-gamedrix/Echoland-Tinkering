@@ -3370,25 +3370,86 @@ const app = new Elysia()
     port: PORT_API,
   })
 
-// Watch for changes in area files and rebuild index
+// Watch for changes in area files and update index incrementally
 import { watch } from "fs";
 
 const areaFolder = "./data/area/info/";
 let debounceTimer;
+let areaIndex = {}; // Keep index in memory
+
+// Load initial index on startup
+loadAreaIndex().catch(err => console.error("Failed to load initial area index:", err));
 
 watch(areaFolder, { recursive: true }, (eventType, filename) => {
+  if (!filename || !filename.endsWith('.json')) return; // Only care about JSON files
+
   console.log(`[Area Watcher] Detected ${eventType} on ${filename}`);
 
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(async () => {
-    console.log("[Area Watcher] Rebuilding area index...");
-    await rebuildAreaIndex(); // Make sure this function exists
-  }, 1000); // Wait 1 second after last change
+    const areaId = path.basename(filename, '.json');
+    await updateAreaIndexEntry(areaId, eventType);
+  }, 500); // Reduced debounce time since we're more efficient
 });
 
 import { readdir, readFile } from "fs/promises";
 
+async function loadAreaIndex() {
+  const cachePath = path.resolve("./cache/areaIndex.json");
+
+  try {
+    const cacheFile = Bun.file(cachePath);
+    if (await cacheFile.exists()) {
+      areaIndex = await cacheFile.json();
+      console.log(`[Area Index] Loaded ${Object.keys(areaIndex).length} areas from cache`);
+    } else {
+      console.log("[Area Index] No cache found, starting with empty index");
+      areaIndex = {};
+    }
+  } catch (err) {
+    console.error("[Area Index] Failed to load cache, starting fresh:", err);
+    areaIndex = {};
+  }
+}
+
+async function updateAreaIndexEntry(areaId: string, eventType: string) {
+  const cachePath = path.resolve("./cache/areaIndex.json");
+  const filePath = path.resolve("./data/area/info/", `${areaId}.json`);
+
+  try {
+    if (eventType === 'rename' || eventType === 'change') {
+      // File might have been created/modified
+      const file = Bun.file(filePath);
+      if (await file.exists()) {
+        const content = await file.text();
+        const areaData = JSON.parse(content);
+
+        areaIndex[areaId] = {
+          areaId,
+          urlName: areaData.urlName || null,
+          creatorId: areaData.creatorId || null,
+          editors: areaData.editors || [],
+          tags: areaData.tags || [],
+          title: areaData.name || null
+        };
+        console.log(`[Area Index] Updated entry for ${areaId}`);
+      } else {
+        // File was deleted
+        delete areaIndex[areaId];
+        console.log(`[Area Index] Removed entry for ${areaId}`);
+      }
+    }
+
+    // Save updated index
+    await fs.writeFile(cachePath, JSON.stringify(areaIndex, null, 2));
+  } catch (err) {
+    console.warn(`[Area Index] Failed to update entry for ${areaId}:`, err);
+  }
+}
+
+// Keep the old rebuildAreaIndex as a fallback for full rebuilds if needed
 async function rebuildAreaIndex() {
+  console.log("[Area Index] Performing full rebuild...");
   const areaDir = path.resolve("./data/area/info/");
   const cachePath = path.resolve("./cache/areaIndex.json");
 
@@ -3420,6 +3481,7 @@ async function rebuildAreaIndex() {
       }
     }
 
+    areaIndex = index; // Update in-memory index
     await fs.writeFile(cachePath, JSON.stringify(index, null, 2));
     console.log(`[Area Index] Rebuilt index with ${Object.keys(index).length} areas`);
   } catch (err) {
