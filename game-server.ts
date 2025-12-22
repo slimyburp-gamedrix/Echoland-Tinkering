@@ -791,9 +791,9 @@ const app = new Elysia()
     const pendingHtml = pendingClients.length
       ? pendingClients.map((client) => `
         <div class="client-item">
-          <div>
-            <div><strong>Waiting Client</strong></div>
-            <div class="meta">ID: ${client.id} · Since ${client.timestamp.toLocaleTimeString()}</div>
+          <div class="client-info">
+            <strong>Waiting Client</strong>
+            <div class="client-meta">ID: ${client.id} · Since ${client.timestamp.toLocaleTimeString()}</div>
           </div>
           <form class="assign-form" action="/admin/assign" method="GET">
             <input type="hidden" name="clientId" value="${client.id}" />
@@ -813,61 +813,452 @@ const app = new Elysia()
       ? profiles.map((p) => `<span class="profile-tag">${p}</span>`).join("")
       : `<div class="empty">No profiles yet.</div>`;
 
+    // Get server statistics
+    const serverStats = {
+      uptime: process.uptime(),
+      memory: process.memoryUsage(),
+      nodeVersion: process.version,
+      platform: process.platform
+    };
+
     const html = `<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Echoland Admin</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Echoland Admin Panel</title>
   <style>
-    body { font-family: Arial, sans-serif; background: #0f141c; color: #e0e6f0; margin: 0; padding: 30px; }
-    .container { max-width: 900px; margin: 0 auto; }
-    h1 { margin-bottom: 20px; }
-    .card { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 20px; margin-bottom: 20px; }
-    .client-item { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
-    .client-item:last-child { border-bottom: none; }
-    .assign-form { display: flex; gap: 8px; align-items: center; }
-    select, input[type="text"] { padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.3); color: #fff; }
-    button { padding: 8px 16px; border: none; border-radius: 6px; background: #2f89ff; color: white; cursor: pointer; }
-    button:hover { background: #1d6adf; }
-    .profile-tag { display: inline-block; padding: 6px 12px; background: rgba(255,255,255,0.1); margin: 4px; border-radius: 12px; }
-    .empty { color: #8a93a6; font-style: italic; }
-    form.inline { display: flex; gap: 8px; margin-top: 12px; }
-    .active-badge { display: inline-block; padding: 6px 14px; background: #22c55e; color: #000; font-weight: bold; border-radius: 20px; margin-left: 12px; }
-    .header { display: flex; align-items: center; margin-bottom: 20px; }
-    .header h1 { margin: 0; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: #e0e6f0;
+      margin: 0;
+      padding: 0;
+      min-height: 100vh;
+    }
+    .nav {
+      background: rgba(15, 20, 28, 0.95);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      padding: 0;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .nav-tabs {
+      display: flex;
+      margin: 0;
+      padding: 0 20px;
+      list-style: none;
+    }
+    .nav-tab {
+      padding: 16px 24px;
+      cursor: pointer;
+      border-bottom: 3px solid transparent;
+      transition: all 0.3s ease;
+      position: relative;
+    }
+    .nav-tab:hover {
+      background: rgba(255,255,255,0.05);
+    }
+    .nav-tab.active {
+      border-bottom-color: #4f9cf9;
+      background: rgba(79, 156, 249, 0.1);
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 30px 20px;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 30px;
+      background: rgba(15, 20, 28, 0.8);
+      backdrop-filter: blur(10px);
+      border-radius: 16px;
+      padding: 24px;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .header h1 {
+      margin: 0;
+      background: linear-gradient(45deg, #4f9cf9, #63b3ed);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      font-size: 2.5rem;
+      font-weight: 700;
+    }
+    .status-badges {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+    .status-badge {
+      padding: 8px 16px;
+      border-radius: 20px;
+      font-size: 14px;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .status-badge.active {
+      background: #10b981;
+      color: white;
+    }
+    .status-badge.waiting {
+      background: #f59e0b;
+      color: white;
+    }
+    .status-badge.offline {
+      background: #6b7280;
+      color: white;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+      gap: 24px;
+      margin-bottom: 30px;
+    }
+    .card {
+      background: rgba(15, 20, 28, 0.8);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 16px;
+      padding: 24px;
+      transition: all 0.3s ease;
+    }
+    .card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    }
+    .card h2 {
+      margin: 0 0 20px 0;
+      color: #4f9cf9;
+      font-size: 1.5rem;
+      font-weight: 600;
+    }
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+    }
+    .stat-item {
+      background: rgba(255,255,255,0.05);
+      padding: 16px;
+      border-radius: 12px;
+      text-align: center;
+    }
+    .stat-value {
+      font-size: 2rem;
+      font-weight: 700;
+      color: #10b981;
+      display: block;
+    }
+    .stat-label {
+      font-size: 0.9rem;
+      color: #9ca3af;
+      margin-top: 4px;
+    }
+    .client-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      padding: 16px;
+      background: rgba(255,255,255,0.02);
+      border-radius: 12px;
+      margin-bottom: 12px;
+      border: 1px solid rgba(255,255,255,0.05);
+    }
+    .client-info strong {
+      color: #4f9cf9;
+      display: block;
+      margin-bottom: 4px;
+    }
+    .client-meta {
+      font-size: 0.85rem;
+      color: #9ca3af;
+    }
+    .assign-form {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    select, input[type="text"], input[type="number"] {
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.2);
+      background: rgba(0,0,0,0.3);
+      color: #fff;
+      font-size: 14px;
+    }
+    select:focus, input:focus {
+      outline: none;
+      border-color: #4f9cf9;
+      box-shadow: 0 0 0 2px rgba(79, 156, 249, 0.2);
+    }
+    button {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #4f9cf9 0%, #63b3ed 100%);
+      color: white;
+      cursor: pointer;
+      font-weight: 500;
+      transition: all 0.2s ease;
+    }
+    button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(79, 156, 249, 0.3);
+    }
+    button.danger {
+      background: linear-gradient(135deg, #ef4444 0%, #f87171 100%);
+    }
+    button.danger:hover {
+      box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+    }
+    .profile-tag {
+      display: inline-block;
+      padding: 6px 12px;
+      background: rgba(79, 156, 249, 0.2);
+      border: 1px solid rgba(79, 156, 249, 0.3);
+      color: #4f9cf9;
+      margin: 4px;
+      border-radius: 12px;
+      font-size: 13px;
+    }
+    .empty {
+      color: #6b7280;
+      font-style: italic;
+      text-align: center;
+      padding: 40px;
+    }
+    form.inline {
+      display: flex;
+      gap: 8px;
+      margin-top: 16px;
+      align-items: center;
+    }
+    .form-group {
+      margin-bottom: 16px;
+    }
+    .form-group label {
+      display: block;
+      margin-bottom: 6px;
+      color: #9ca3af;
+      font-size: 14px;
+    }
+    .tab-content {
+      display: none;
+    }
+    .tab-content.active {
+      display: block;
+    }
+    .search-box {
+      width: 100%;
+      padding: 12px;
+      margin-bottom: 20px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.2);
+      background: rgba(0,0,0,0.3);
+      color: #fff;
+      font-size: 16px;
+    }
+    .search-box:focus {
+      border-color: #4f9cf9;
+      box-shadow: 0 0 0 2px rgba(79, 156, 249, 0.2);
+    }
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 16px;
+    }
+    .table th, .table td {
+      padding: 12px;
+      text-align: left;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    .table th {
+      color: #9ca3af;
+      font-weight: 500;
+      font-size: 14px;
+    }
+    .table tr:hover {
+      background: rgba(255,255,255,0.02);
+    }
+    .actions {
+      display: flex;
+      gap: 8px;
+    }
+    @media (max-width: 768px) {
+      .container { padding: 20px 15px; }
+      .header { flex-direction: column; gap: 16px; text-align: center; }
+      .grid { grid-template-columns: 1fr; }
+      .client-item { flex-direction: column; align-items: flex-start; gap: 12px; }
+      .assign-form { width: 100%; }
+    }
   </style>
 </head>
 <body>
+  <nav class="nav">
+    <ul class="nav-tabs">
+      <li class="nav-tab active" data-tab="dashboard">Dashboard</li>
+      <li class="nav-tab" data-tab="clients">Clients</li>
+      <li class="nav-tab" data-tab="profiles">Profiles</li>
+      <li class="nav-tab" data-tab="areas">Areas</li>
+      <li class="nav-tab" data-tab="things">Things</li>
+      <li class="nav-tab" data-tab="forums">Forums</li>
+      <li class="nav-tab" data-tab="system">System</li>
+    </ul>
+  </nav>
+
   <div class="container">
     <div class="header">
-      <h1>Echoland Admin</h1>
-      <span id="active-profile" class="active-badge">${currentActiveProfile ? 'Active: ' + currentActiveProfile : 'No active profile'}</span>
+      <h1>Echoland Admin Panel</h1>
+      <div class="status-badges">
+        <span class="status-badge active" id="active-profile">
+          ${currentActiveProfile ? 'Active: ' + currentActiveProfile : 'No active profile'}
+        </span>
+        <span class="status-badge ${pendingClients.length > 0 ? 'waiting' : 'offline'}">
+          ${pendingClients.length} waiting
+        </span>
+      </div>
     </div>
-    <div class="card">
-      <h2>Pending Clients (${pendingClients.length})</h2>
-      ${pendingHtml}
+
+    <!-- Dashboard Tab -->
+    <div id="dashboard" class="tab-content active">
+      <div class="grid">
+        <div class="card">
+          <h2>Server Statistics</h2>
+          <div class="stats-grid">
+            <div class="stat-item">
+              <span class="stat-value">${Math.floor(serverStats.uptime / 3600)}h ${Math.floor((serverStats.uptime % 3600) / 60)}m</span>
+              <span class="stat-label">Uptime</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-value">${Math.round(serverStats.memory.heapUsed / 1024 / 1024)}MB</span>
+              <span class="stat-label">Memory Used</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-value">${profiles.length}</span>
+              <span class="stat-label">Total Profiles</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-value">${pendingClients.length}</span>
+              <span class="stat-label">Active Clients</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Quick Actions</h2>
+          <div class="actions">
+            <button onclick="refreshStats()">Refresh Stats</button>
+            <button onclick="clearCache()" class="danger">Clear Cache</button>
+          </div>
+        </div>
+      </div>
     </div>
-    <div class="card">
-      <h2>Profiles (${profiles.length})</h2>
-      <div>${profileList}</div>
-      <form class="inline" action="/admin/create-profile" method="GET">
-        <input type="text" name="name" placeholder="New profile name" required />
-        <button type="submit">Create</button>
-      </form>
+
+    <!-- Clients Tab -->
+    <div id="clients" class="tab-content">
+      <div class="card">
+        <h2>Pending Clients (${pendingClients.length})</h2>
+        ${pendingHtml}
+      </div>
+    </div>
+
+    <!-- Profiles Tab -->
+    <div id="profiles" class="tab-content">
+      <div class="card">
+        <h2>Profile Management (${profiles.length})</h2>
+        <div style="margin-bottom: 20px;">${profileList}</div>
+        <form class="inline" action="/admin/create-profile" method="GET">
+          <input type="text" name="name" placeholder="New profile name" required />
+          <button type="submit">Create Profile</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Areas Tab -->
+    <div id="areas" class="tab-content">
+      <div class="card">
+        <h2>Area Management</h2>
+        <input type="text" class="search-box" placeholder="Search areas..." id="areaSearch">
+        <div id="areasList">
+          <div class="empty">Loading areas...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Things Tab -->
+    <div id="things" class="tab-content">
+      <div class="card">
+        <h2>Thing Management</h2>
+        <input type="text" class="search-box" placeholder="Search things..." id="thingSearch">
+        <div id="thingsList">
+          <div class="empty">Loading things...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Forums Tab -->
+    <div id="forums" class="tab-content">
+      <div class="card">
+        <h2>Forum Management</h2>
+        <div id="forumsList">
+          <div class="empty">Loading forums...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- System Tab -->
+    <div id="system" class="tab-content">
+      <div class="card">
+        <h2>System Information</h2>
+        <table class="table">
+          <tr><th>Node Version</th><td>${serverStats.nodeVersion}</td></tr>
+          <tr><th>Platform</th><td>${serverStats.platform}</td></tr>
+          <tr><th>Architecture</th><td>${process.arch}</td></tr>
+          <tr><th>PID</th><td>${process.pid}</td></tr>
+          <tr><th>Memory (RSS)</th><td>${Math.round(serverStats.memory.rss / 1024 / 1024)} MB</td></tr>
+          <tr><th>Memory (Heap Total)</th><td>${Math.round(serverStats.memory.heapTotal / 1024 / 1024)} MB</td></tr>
+          <tr><th>Memory (Heap Used)</th><td>${Math.round(serverStats.memory.heapUsed / 1024 / 1024)} MB</td></tr>
+          <tr><th>External Memory</th><td>${Math.round(serverStats.memory.external / 1024 / 1024)} MB</td></tr>
+        </table>
+      </div>
     </div>
   </div>
+
   <script>
+    // Tab switching
+    document.querySelectorAll('.nav-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
+        tab.classList.add('active');
+        document.getElementById(tab.dataset.tab).classList.add('active');
+      });
+    });
+
+    // SSE connection for real-time updates
     (() => {
       let eventSource = null;
       let reconnectTimer = null;
-      
+
       function connect() {
         if (eventSource) {
           eventSource.close();
         }
-        
+
         console.log('[Admin] Connecting to SSE...');
         eventSource = new EventSource('/admin/events');
-        
+
         eventSource.onopen = () => {
           console.log('[Admin] SSE connected');
           if (reconnectTimer) {
@@ -875,7 +1266,7 @@ const app = new Elysia()
             reconnectTimer = null;
           }
         };
-        
+
         eventSource.onerror = (e) => {
           console.log('[Admin] SSE error, will reconnect...');
           eventSource.close();
@@ -883,31 +1274,161 @@ const app = new Elysia()
             reconnectTimer = setTimeout(connect, 2000);
           }
         };
-        
-        eventSource.addEventListener('pending', (e) => {
-          console.log('[Admin] Pending change:', e.data);
-          window.location.reload();
-        });
-        
-        eventSource.addEventListener('profile', (e) => {
-          console.log('[Admin] Profile change:', e.data);
-          // Update active profile display without full reload
+
+        eventSource.onmessage = (e) => {
           try {
             const data = JSON.parse(e.data);
-            const badge = document.getElementById('active-profile');
-            if (badge && data.profile) {
-              badge.textContent = 'Active: ' + data.profile;
+            console.log('[Admin] Event:', data);
+
+            if (data.type === 'profile') {
+              const badge = document.getElementById('active-profile');
+              if (badge && data.profile) {
+                badge.textContent = 'Active: ' + data.profile;
+              }
             }
-          } catch {}
-        });
-        
-        eventSource.addEventListener('connected', (e) => {
-          console.log('[Admin] SSE ready');
-        });
+
+            if (data.type === 'stats') {
+              updateStats(data.stats);
+            }
+          } catch (err) {
+            console.warn('[Admin] Failed to parse event:', err);
+          }
+        };
       }
-      
+
       connect();
     })();
+
+    // Quick actions
+    function refreshStats() {
+      fetch('/admin/stats')
+        .then(r => r.json())
+        .then(data => {
+          console.log('Stats refreshed:', data);
+          location.reload();
+        })
+        .catch(err => console.error('Failed to refresh stats:', err));
+    }
+
+    function clearCache() {
+      if (confirm('Are you sure you want to clear the cache?')) {
+        fetch('/admin/clear-cache', { method: 'POST' })
+          .then(() => {
+            alert('Cache cleared successfully');
+            location.reload();
+          })
+          .catch(err => console.error('Failed to clear cache:', err));
+      }
+    }
+
+    // Load areas data
+    fetch('/admin/areas')
+      .then(r => r.json())
+      .then(data => {
+        const container = document.getElementById('areasList');
+        if (data.areas && data.areas.length > 0) {
+          container.innerHTML = '<table class="table"><thead><tr><th>Name</th><th>ID</th><th>Creator</th><th>Actions</th></tr></thead><tbody>' +
+            data.areas.slice(0, 50).map(area => \`
+              <tr>
+                <td>\${area.title || area.name || 'Unnamed'}</td>
+                <td>\${area.areaId}</td>
+                <td>\${area.creatorId || 'Unknown'}</td>
+                <td class="actions">
+                  <button onclick="viewArea('\${area.areaId}')">View</button>
+                  <button onclick="deleteArea('\${area.areaId}')" class="danger">Delete</button>
+                </td>
+              </tr>
+            \`).join('') + '</tbody></table>';
+        } else {
+          container.innerHTML = '<div class="empty">No areas found.</div>';
+        }
+      })
+      .catch(err => {
+        console.error('Failed to load areas:', err);
+        document.getElementById('areasList').innerHTML = '<div class="empty">Failed to load areas.</div>';
+      });
+
+    // Load things data
+    fetch('/admin/things')
+      .then(r => r.json())
+      .then(data => {
+        const container = document.getElementById('thingsList');
+        if (data.things && data.things.length > 0) {
+          container.innerHTML = '<table class="table"><thead><tr><th>Name</th><th>ID</th><th>Creator</th><th>Actions</th></tr></thead><tbody>' +
+            data.things.slice(0, 50).map(thing => \`
+              <tr>
+                <td>\${thing.name || 'Unnamed'}</td>
+                <td>\${thing.id}</td>
+                <td>\${thing.creatorId || 'Unknown'}</td>
+                <td class="actions">
+                  <button onclick="viewThing('\${thing.id}')">View</button>
+                  <button onclick="deleteThing('\${thing.id}')" class="danger">Delete</button>
+                </td>
+              </tr>
+            \`).join('') + '</tbody></table>';
+        } else {
+          container.innerHTML = '<div class="empty">No things found.</div>';
+        }
+      })
+      .catch(err => {
+        console.error('Failed to load things:', err);
+        document.getElementById('thingsList').innerHTML = '<div class="empty">Failed to load things.</div>';
+      });
+
+    // Load forums data
+    fetch('/admin/forums')
+      .then(r => r.json())
+      .then(data => {
+        const container = document.getElementById('forumsList');
+        if (data.forums && data.forums.length > 0) {
+          container.innerHTML = '<table class="table"><thead><tr><th>Name</th><th>Description</th><th>Threads</th><th>Actions</th></tr></thead><tbody>' +
+            data.forums.map(forum => \`
+              <tr>
+                <td>\${forum.name}</td>
+                <td>\${forum.description || ''}</td>
+                <td>\${forum.threadCount || 0}</td>
+                <td class="actions">
+                  <button onclick="viewForum('\${forum.id}')">View</button>
+                  <button onclick="deleteForum('\${forum.id}')" class="danger">Delete</button>
+                </td>
+              </tr>
+            \`).join('') + '</tbody></table>';
+        } else {
+          container.innerHTML = '<div class="empty">No forums found.</div>';
+        }
+      })
+      .catch(err => {
+        console.error('Failed to load forums:', err);
+        document.getElementById('forumsList').innerHTML = '<div class="empty">Failed to load forums.</div>';
+      });
+
+    function viewArea(areaId) { window.open(\`/area/\${areaId}\`, '_blank'); }
+    function viewThing(thingId) { window.open(\`/thing/\${thingId}\`, '_blank'); }
+    function viewForum(forumId) { window.open(\`/forum/\${forumId}\`, '_blank'); }
+
+    function deleteArea(areaId) {
+      if (confirm('Are you sure you want to delete this area?')) {
+        fetch(\`/admin/areas/\${areaId}\`, { method: 'DELETE' })
+          .then(() => location.reload())
+          .catch(err => alert('Failed to delete area: ' + err));
+      }
+    }
+
+    function deleteThing(thingId) {
+      if (confirm('Are you sure you want to delete this thing?')) {
+        fetch(\`/admin/things/\${thingId}\`, { method: 'DELETE' })
+          .then(() => location.reload())
+          .catch(err => alert('Failed to delete thing: ' + err));
+      }
+    }
+
+    function deleteForum(forumId) {
+      if (confirm('Are you sure you want to delete this forum?')) {
+        fetch(\`/admin/forums/\${forumId}\`, { method: 'DELETE' })
+          .then(() => location.reload())
+          .catch(err => alert('Failed to delete forum: ' + err));
+      }
+    }
   </script>
 </body>
 </html>`;
@@ -948,6 +1469,247 @@ const app = new Elysia()
       name: t.Optional(t.String())
     })
   })
+
+  // New admin API endpoints for the enhanced admin interface
+  .get("/admin/stats", async () => {
+    const stats = {
+      uptime: process.uptime(),
+      memory: process.memoryUsage(),
+      profiles: await listProfiles(),
+      clients: pendingClients.length,
+      nodeVersion: process.version,
+      platform: process.platform
+    };
+    return new Response(JSON.stringify(stats), {
+      headers: { "Content-Type": "application/json" }
+    });
+  })
+
+  .post("/admin/clear-cache", async () => {
+    try {
+      // Clear area index cache
+      const cachePath = path.resolve("./cache/areaIndex.json");
+      if (await fs.access(cachePath).then(() => true).catch(() => false)) {
+        await fs.unlink(cachePath);
+      }
+      // Clear thing index cache
+      const thingCachePath = path.resolve("./cache/thingIndex.json");
+      if (await fs.access(thingCachePath).then(() => true).catch(() => false)) {
+        await fs.unlink(thingCachePath);
+      }
+      console.log("[Admin] Cache cleared");
+      return new Response(JSON.stringify({ success: true }), {
+        headers: { "Content-Type": "application/json" }
+      });
+    } catch (err) {
+      console.error("[Admin] Failed to clear cache:", err);
+      return new Response(JSON.stringify({ error: "Failed to clear cache" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  })
+
+  .get("/admin/areas", async () => {
+    try {
+      const areas = [];
+      const areaDir = "./data/area/info/";
+
+      try {
+        const files = await fs.readdir(areaDir);
+        for (const file of files.slice(0, 100)) { // Limit to 100 for performance
+          if (file.endsWith('.json')) {
+            try {
+              const filePath = path.join(areaDir, file);
+              const content = await fs.readFile(filePath, 'utf-8');
+              const areaData = JSON.parse(content);
+              areas.push({
+                areaId: path.basename(file, '.json'),
+                title: areaData.name,
+                creatorId: areaData.creatorId,
+                tags: areaData.tags || [],
+                urlName: areaData.urlName
+              });
+            } catch (err) {
+              console.warn(`Failed to parse area ${file}:`, err);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("Failed to read areas directory:", err);
+      }
+
+      return new Response(JSON.stringify({ areas }), {
+        headers: { "Content-Type": "application/json" }
+      });
+    } catch (err) {
+      console.error("[Admin] Failed to get areas:", err);
+      return new Response(JSON.stringify({ areas: [], error: "Failed to load areas" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  })
+
+  .get("/admin/things", async () => {
+    try {
+      const things = [];
+      const thingDir = "./data/thing/";
+
+      try {
+        const files = await fs.readdir(thingDir);
+        for (const file of files.slice(0, 100)) { // Limit to 100 for performance
+          if (file.endsWith('.json')) {
+            try {
+              const filePath = path.join(thingDir, file);
+              const content = await fs.readFile(filePath, 'utf-8');
+              const thingData = JSON.parse(content);
+              things.push({
+                id: path.basename(file, '.json'),
+                name: thingData.name,
+                creatorId: thingData.creatorId,
+                description: thingData.description
+              });
+            } catch (err) {
+              console.warn(`Failed to parse thing ${file}:`, err);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("Failed to read things directory:", err);
+      }
+
+      return new Response(JSON.stringify({ things }), {
+        headers: { "Content-Type": "application/json" }
+      });
+    } catch (err) {
+      console.error("[Admin] Failed to get things:", err);
+      return new Response(JSON.stringify({ things: [], error: "Failed to load things" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  })
+
+  .get("/admin/forums", async () => {
+    try {
+      const forums = [];
+      const forumDir = "./data/forum/";
+
+      try {
+        const files = await fs.readdir(forumDir);
+        for (const file of files.slice(0, 50)) { // Limit for performance
+          if (file.endsWith('.json')) {
+            try {
+              const filePath = path.join(forumDir, file);
+              const content = await fs.readFile(filePath, 'utf-8');
+              const forumData = JSON.parse(content);
+              forums.push({
+                id: path.basename(file, '.json'),
+                name: forumData.name,
+                description: forumData.description,
+                creatorId: forumData.creatorId,
+                threadCount: forumData.threads ? Object.keys(forumData.threads).length : 0
+              });
+            } catch (err) {
+              console.warn(`Failed to parse forum ${file}:`, err);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("Failed to read forums directory:", err);
+      }
+
+      return new Response(JSON.stringify({ forums }), {
+        headers: { "Content-Type": "application/json" }
+      });
+    } catch (err) {
+      console.error("[Admin] Failed to get forums:", err);
+      return new Response(JSON.stringify({ forums: [], error: "Failed to load forums" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  })
+
+  .delete("/admin/areas/:id", async ({ params }) => {
+    try {
+      const areaId = params.id;
+      const areaPath = `./data/area/info/${areaId}.json`;
+
+      if (await fs.access(areaPath).then(() => true).catch(() => false)) {
+        await fs.unlink(areaPath);
+        console.log(`[Admin] Deleted area: ${areaId}`);
+        return new Response(JSON.stringify({ success: true }), {
+          headers: { "Content-Type": "application/json" }
+        });
+      } else {
+        return new Response(JSON.stringify({ error: "Area not found" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+    } catch (err) {
+      console.error(`[Admin] Failed to delete area ${params.id}:`, err);
+      return new Response(JSON.stringify({ error: "Failed to delete area" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  })
+
+  .delete("/admin/things/:id", async ({ params }) => {
+    try {
+      const thingId = params.id;
+      const thingPath = `./data/thing/${thingId}.json`;
+
+      if (await fs.access(thingPath).then(() => true).catch(() => false)) {
+        await fs.unlink(thingPath);
+        console.log(`[Admin] Deleted thing: ${thingId}`);
+        return new Response(JSON.stringify({ success: true }), {
+          headers: { "Content-Type": "application/json" }
+        });
+      } else {
+        return new Response(JSON.stringify({ error: "Thing not found" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+    } catch (err) {
+      console.error(`[Admin] Failed to delete thing ${params.id}:`, err);
+      return new Response(JSON.stringify({ error: "Failed to delete thing" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  })
+
+  .delete("/admin/forums/:id", async ({ params }) => {
+    try {
+      const forumId = params.id;
+      const forumPath = `./data/forum/${forumId}.json`;
+
+      if (await fs.access(forumPath).then(() => true).catch(() => false)) {
+        await fs.unlink(forumPath);
+        console.log(`[Admin] Deleted forum: ${forumId}`);
+        return new Response(JSON.stringify({ success: true }), {
+          headers: { "Content-Type": "application/json" }
+        });
+      } else {
+        return new Response(JSON.stringify({ error: "Forum not found" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+    } catch (err) {
+      console.error(`[Admin] Failed to delete forum ${params.id}:`, err);
+      return new Response(JSON.stringify({ error: "Failed to delete forum" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  })
+
   .get("/api/profiles", async () => {
     const profiles = await listProfiles();
     return new Response(JSON.stringify({ profiles }), {
