@@ -818,20 +818,6 @@ const app = new Elysia()
       ? profiles.map((p) => `<span class="profile-tag">${p}</span>`).join("")
       : `<div class="empty">No profiles yet.</div>`;
 
-    const nextProfileHtml = nextClientProfile
-      ? `<div style="margin: 12px 0; padding: 8px; background: rgba(34, 197, 94, 0.1); border: 1px solid #22c55e; border-radius: 6px;">
-          <strong>Next Client Profile:</strong> ${nextClientProfile}
-          <a href="/admin/clear-next-profile" style="color: #dc2626; margin-left: 12px; text-decoration: none;">[Clear]</a>
-         </div>`
-      : `<form class="inline" action="/admin/set-next-profile" method="GET" style="margin: 12px 0; padding: 12px; border: 1px solid rgba(255,255,255,0.1); border-radius: 6px;">
-          <strong>Set next client profile:</strong>
-          <select name="profile" style="margin: 0 8px;">
-            <option value="">Select profile</option>
-            ${profiles.map((p) => `<option value="${p}" ${nextClientProfile === p ? 'selected' : ''}>${p}</option>`).join("")}
-          </select>
-          <button type="submit">Set for Next Client</button>
-         </form>`;
-
     const html = `<!DOCTYPE html>
 <html>
 <head>
@@ -868,14 +854,9 @@ const app = new Elysia()
     <div class="card">
       <h2>Profiles (${profiles.length})</h2>
       <div>${profileList}</div>
-      ${nextProfileHtml}
       <form class="inline" action="/admin/create-profile" method="GET">
         <input type="text" name="name" placeholder="New profile name" required />
         <button type="submit">Create</button>
-      </form>
-      <form class="inline" action="/admin/clear-cache" method="GET" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1);">
-        <button type="submit" style="background: #dc2626;" onclick="return confirm('This will delete all cached data and require a server restart to rebuild. Continue?')">Clear All Cache</button>
-        <span style="color: #8a93a6; font-size: 14px; margin-left: 12px;">Forces rebuild of thing and area indexes on next server start</span>
       </form>
     </div>
   </div>
