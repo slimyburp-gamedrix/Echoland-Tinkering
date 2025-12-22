@@ -35,6 +35,8 @@ const LEGACY_ACCOUNT_PATH = "./data/person/account.json";
 
 // Track the currently active profile (for Unity clients that don't send cookies)
 let currentActiveProfile: string | null = null;
+// Track pre-selected profile for next client connection
+let nextClientProfile: string | null = null;
 
 function getAccountPathForProfile(profileName: string): string {
   return `${ACCOUNTS_DIR}/${profileName}.json`;
