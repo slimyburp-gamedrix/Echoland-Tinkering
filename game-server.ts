@@ -303,7 +303,12 @@ async function initDefaults() {
 
   await fs.writeFile(`./data/area/info/${areaId}.json`, JSON.stringify(areaInfo, null, 2));
   await fs.writeFile(`./data/area/load/${areaId}.json`, JSON.stringify(areaLoad, null, 2));
-  await fs.writeFile(`./data/area/bundle/${areaId}.json`, JSON.stringify(areaBundle, null, 2));
+
+  // Create bundle in subfolder with proper structure: bundle/{areaId}/{bundleKey}.json
+  const bundleFolder = `./data/area/bundle/${areaId}`;
+  await fs.mkdir(bundleFolder, { recursive: true });
+  const bundlePath = `${bundleFolder}/${areaKey}.json`;
+  await fs.writeFile(bundlePath, JSON.stringify(areaBundle, null, 2));
 
   console.log(`🌍 Created default home area for ${accountData.screenName}`);
 }
@@ -454,7 +459,12 @@ async function ensureHomeArea(account: Record<string, any>) {
 
   await fs.writeFile(`./data/area/info/${areaId}.json`, JSON.stringify(areaInfo, null, 2));
   await fs.writeFile(`./data/area/load/${areaId}.json`, JSON.stringify(areaLoad, null, 2));
-  await fs.writeFile(`./data/area/bundle/${areaId}.json`, JSON.stringify(areaBundle, null, 2));
+
+  // Create bundle in subfolder with proper structure: bundle/{areaId}/{bundleKey}.json
+  const bundleFolder = `./data/area/bundle/${areaId}`;
+  await fs.mkdir(bundleFolder, { recursive: true });
+  const bundlePath = `${bundleFolder}/${areaKey}.json`;
+  await fs.writeFile(bundlePath, JSON.stringify(areaBundle, null, 2));
 
   await injectInitialAreaToList(areaId, areaName);
 
