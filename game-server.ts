@@ -816,6 +816,20 @@ const app = new Elysia()
       ? profiles.map((p) => `<span class="profile-tag">${p}</span>`).join("")
       : `<div class="empty">No profiles yet.</div>`;
 
+    const nextProfileHtml = nextClientProfile
+      ? `<div style="margin: 12px 0; padding: 8px; background: rgba(34, 197, 94, 0.1); border: 1px solid #22c55e; border-radius: 6px;">
+          <strong>Next Client Profile:</strong> ${nextClientProfile}
+          <a href="/admin/clear-next-profile" style="color: #dc2626; margin-left: 12px; text-decoration: none;">[Clear]</a>
+         </div>`
+      : `<form class="inline" action="/admin/set-next-profile" method="GET" style="margin: 12px 0; padding: 12px; border: 1px solid rgba(255,255,255,0.1); border-radius: 6px;">
+          <strong>Set next client profile:</strong>
+          <select name="profile" style="margin: 0 8px;">
+            <option value="">Select profile</option>
+            ${profiles.map((p) => `<option value="${p}" ${nextClientProfile === p ? 'selected' : ''}>${p}</option>`).join("")}
+          </select>
+          <button type="submit">Set for Next Client</button>
+         </form>`;
+
     const html = `<!DOCTYPE html>
 <html>
 <head>
@@ -856,6 +870,7 @@ const app = new Elysia()
         <input type="text" name="name" placeholder="New profile name" required />
         <button type="submit">Create</button>
       </form>
+      ${nextProfileHtml}
     </div>
   </div>
   <script>
@@ -1015,14 +1030,21 @@ const app = new Elysia()
         (body && typeof body === "object" && "profile" in body ? (body as any).profile : null) ||
         null;
 
-      // If no profile specified, wait for admin to assign one
+      // If no profile specified, check if there's a pre-selected profile for next client
       if (!profileName) {
-        const clientId = `client-${++pendingClientCounter}`;
-        console.log(`[AUTH] New client awaiting profile selection (client ${clientId})`);
-        profileName = await new Promise<string>((resolve) => {
-          pendingClients.push({ id: clientId, resolve, timestamp: new Date() });
-          notifyPendingChange();
-        });
+        if (nextClientProfile) {
+          console.log(`[AUTH] Auto-assigning pre-selected profile: ${nextClientProfile}`);
+          profileName = nextClientProfile;
+          nextClientProfile = null; // Clear after use
+        } else {
+          // Wait for admin to assign one
+          const clientId = `client-${++pendingClientCounter}`;
+          console.log(`[AUTH] New client awaiting profile selection (client ${clientId})`);
+          profileName = await new Promise<string>((resolve) => {
+            pendingClients.push({ id: clientId, resolve, timestamp: new Date() });
+            notifyPendingChange();
+          });
+        }
       }
 
       // If there was a previous active profile, save its data first
