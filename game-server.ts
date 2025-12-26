@@ -1336,6 +1336,43 @@ const app = new Elysia()
     },
     { body: t.Object({ areaId: t.String() }) }
   )
+  .get("/area/random", async () => {
+    try {
+      // Get all available areas from the index
+      if (areaIndex.length === 0) {
+        return new Response(JSON.stringify({
+          ok: false,
+          error: "No areas available"
+        }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+
+      // Pick a random area
+      const randomIndex = Math.floor(Math.random() * areaIndex.length);
+      const randomArea = areaIndex[randomIndex];
+
+      console.log(`[AREA RANDOM] Selected area: ${randomArea.name} (${randomArea.id})`);
+
+      // Return area info in the format expected by the client
+      return {
+        areaId: randomArea.id,
+        areaName: randomArea.name,
+        areaUrlName: randomArea.name.replace(/[^-_a-z0-9]/gi, "").toLowerCase(),
+        ok: true
+      };
+    } catch (error) {
+      console.error("[AREA RANDOM] Error:", error);
+      return new Response(JSON.stringify({
+        ok: false,
+        error: "Failed to get random area"
+      }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  })
   .post("/area/save",
     async ({ body }) => {
       const areaId = body.id || generateObjectId();
