@@ -36,6 +36,9 @@ const LEGACY_ACCOUNT_PATH = "./data/person/account.json";
 // Track the currently active profile (for Unity clients that don't send cookies)
 let currentActiveProfile: string | null = null;
 
+// Track the next client profile to auto-assign
+let nextClientProfile: string | null = null;
+
 function getAccountPathForProfile(profileName: string): string {
   return `${ACCOUNTS_DIR}/${profileName}.json`;
 }
@@ -965,6 +968,23 @@ const app = new Elysia()
     query: t.Object({
       name: t.Optional(t.String())
     })
+  })
+  .get("/admin/set-next-profile", async ({ query }) => {
+    const profileName = (query.profile || "").trim();
+    if (profileName) {
+      nextClientProfile = profileName;
+      console.log(`[ADMIN] Set next client profile to: ${profileName}`);
+    }
+    return Response.redirect("/admin", 302);
+  }, {
+    query: t.Object({
+      profile: t.Optional(t.String())
+    })
+  })
+  .get("/admin/clear-next-profile", async () => {
+    nextClientProfile = null;
+    console.log(`[ADMIN] Cleared next client profile`);
+    return Response.redirect("/admin", 302);
   })
   .get("/api/profiles", async () => {
     const profiles = await listProfiles();
