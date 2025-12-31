@@ -88,6 +88,17 @@ The server is written in TypeScript and runs with Bun. Contributions are welcome
 
 ---
 
+## Final Setup Steps (for both options)
+
+In the admin panel, create user profiles  
+Start the Anyland game client  
+Refresh the admin page to see pending connections  
+Assign profiles to connected clients  
+**Optional:** You can also pre-assign a profile for the next connecting client in advance using the "Set Next Profile" feature  
+You're playing—enjoy!
+
+---
+
 ## Setup & Running
 
 [Echoland An Open Source Dedicated Server For Anyland](https://www.youtube.com/watch?v=1C4PxRaJKa8&t)
