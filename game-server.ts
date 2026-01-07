@@ -792,6 +792,29 @@ const app = new Elysia()
     console.log(request.method, path, { body, params })
   })
 
+// Helper function to find user ID by username
+async function findUserIdByUsername(username: string): Promise<string | null> {
+  try {
+    const infoDir = "./data/person/info/";
+    const files = await fs.readdir(infoDir);
+
+    for (const file of files) {
+      if (file.endsWith('.json')) {
+        const filePath = path.join(infoDir, file);
+        const userData = await Bun.file(filePath).json();
+
+        if (userData.screenName && userData.screenName.toLowerCase() === username.toLowerCase()) {
+          return userData.id;
+        }
+      }
+    }
+  } catch (error) {
+    console.error("Error searching for user by username:", error);
+  }
+
+  return null;
+}
+
   .get("/admin", async () => {
     const profiles = await listProfiles();
     const pendingHtml = pendingClients.length
@@ -1499,29 +1522,6 @@ const app = new Elysia()
     },
     { body: t.Object({ areaId: t.String() }) }
   )
-
-// Helper function to find user ID by username
-async function findUserIdByUsername(username: string): Promise<string | null> {
-  try {
-    const infoDir = "./data/person/info/";
-    const files = await fs.readdir(infoDir);
-
-    for (const file of files) {
-      if (file.endsWith('.json')) {
-        const filePath = path.join(infoDir, file);
-        const userData = await Bun.file(filePath).json();
-
-        if (userData.screenName && userData.screenName.toLowerCase() === username.toLowerCase()) {
-          return userData.id;
-        }
-      }
-    }
-  } catch (error) {
-    console.error("Error searching for user by username:", error);
-  }
-
-  return null;
-}
 
 .post(
     "/area/search",
