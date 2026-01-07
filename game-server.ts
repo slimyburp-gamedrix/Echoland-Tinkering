@@ -772,26 +772,6 @@ try {
   // No legacy account yet – skip default area injection until a profile connects
 }
 
-
-const app = new Elysia()
-  .onRequest(async ({ request }) => {
-    console.info(JSON.stringify({
-      ts: new Date().toISOString(),
-      ip: request.headers.get('X-Real-Ip'),
-      ua: request.headers.get("User-Agent"),
-      method: request.method,
-      url: request.url,
-    }));
-  })
-  .onError(async ({ code, error, request }) => {
-    console.info("error in middleware!", request.url, code);
-    console.log(error);
-  })
-  .onTransform(({ request, path, body, params }) => {
-    // Match Redux server's simple logging
-    console.log(request.method, path, { body, params })
-  })
-
 // Helper function to find user ID by username
 async function findUserIdByUsername(username: string): Promise<string | null> {
   try {
@@ -814,6 +794,25 @@ async function findUserIdByUsername(username: string): Promise<string | null> {
 
   return null;
 }
+
+const app = new Elysia()
+  .onRequest(async ({ request }) => {
+    console.info(JSON.stringify({
+      ts: new Date().toISOString(),
+      ip: request.headers.get('X-Real-Ip'),
+      ua: request.headers.get("User-Agent"),
+      method: request.method,
+      url: request.url,
+    }));
+  })
+  .onError(async ({ code, error, request }) => {
+    console.info("error in middleware!", request.url, code);
+    console.log(error);
+  })
+  .onTransform(({ request, path, body, params }) => {
+    // Match Redux server's simple logging
+    console.log(request.method, path, { body, params })
+  });
 
   .get("/admin", async () => {
     const profiles = await listProfiles();
