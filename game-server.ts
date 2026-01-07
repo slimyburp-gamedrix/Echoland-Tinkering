@@ -1512,6 +1512,41 @@ const app = new Elysia()
           return { areas: [], ownPrivateAreas: [] }
         }
       }
+      else if (term.toLowerCase().startsWith("by ")) {
+        // Search by username - extract username after "by "
+        const username = term.slice(3).trim();
+
+        // Find user ID by searching through person info files
+        try {
+          const infoDir = "./data/person/info/";
+          const files = await fs.readdir(infoDir);
+
+          for (const file of files) {
+            if (file.endsWith('.json')) {
+              const filePath = path.join(infoDir, file);
+              const userData = await Bun.file(filePath).json();
+
+              if (userData.screenName && userData.screenName.toLowerCase() === username.toLowerCase()) {
+                // Found the user, now search for their areas
+                const areaFile = Bun.file(path.resolve("./data/person/areasearch/", userData.id + ".json"));
+
+                if (await areaFile.exists()) {
+                  return await areaFile.json();
+                }
+                else {
+                  return { areas: [], ownPrivateAreas: [] };
+                }
+              }
+            }
+          }
+
+          // User not found
+          return { areas: [], ownPrivateAreas: [] };
+        } catch (error) {
+          console.error("Error searching for user by username:", error);
+          return { areas: [], ownPrivateAreas: [] };
+        }
+      }
       else {
         const matchingAreas = searchArea(term);
 
