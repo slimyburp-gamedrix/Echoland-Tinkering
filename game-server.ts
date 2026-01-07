@@ -1499,7 +1499,31 @@ const app = new Elysia()
     },
     { body: t.Object({ areaId: t.String() }) }
   )
-  .post(
+
+// Helper function to find user ID by username
+async function findUserIdByUsername(username: string): Promise<string | null> {
+  try {
+    const infoDir = "./data/person/info/";
+    const files = await fs.readdir(infoDir);
+
+    for (const file of files) {
+      if (file.endsWith('.json')) {
+        const filePath = path.join(infoDir, file);
+        const userData = await Bun.file(filePath).json();
+
+        if (userData.screenName && userData.screenName.toLowerCase() === username.toLowerCase()) {
+          return userData.id;
+        }
+      }
+    }
+  } catch (error) {
+    console.error("Error searching for user by username:", error);
+  }
+
+  return null;
+}
+
+.post(
     "/area/search",
     async ({ body: { term, byCreatorId } }) => {
       if (byCreatorId) {
@@ -1509,6 +1533,26 @@ const app = new Elysia()
           return await file.json()
         }
         else {
+          return { areas: [], ownPrivateAreas: [] }
+        }
+      }
+      else if (term.toLowerCase().startsWith("by ")) {
+        // Search by username - extract username after "by "
+        const username = term.slice(3).trim();
+        const userId = await findUserIdByUsername(username);
+
+        if (userId) {
+          const file = Bun.file(path.resolve("./data/person/areasearch/", userId + ".json"))
+
+          if (await file.exists()) {
+            return await file.json()
+          }
+          else {
+            return { areas: [], ownPrivateAreas: [] }
+          }
+        }
+        else {
+          // User not found, return empty results
           return { areas: [], ownPrivateAreas: [] }
         }
       }
