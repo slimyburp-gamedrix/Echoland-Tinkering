@@ -674,7 +674,7 @@ interface ThingIndexEntry {
 }
 
 const thingIndex: ThingIndexEntry[] = [];
-const THING_INDEX_CACHE = "./cache/thingIndex.json";
+const THING_INDEX_CACHE = path.resolve("./cache/thingIndex.json");
 
 console.log("Building thing search index...");
 const thingCacheFile = createFileHandle(THING_INDEX_CACHE);
@@ -682,21 +682,59 @@ const thingCacheFile = createFileHandle(THING_INDEX_CACHE);
 if (await thingCacheFile.exists()) {
   console.log("Loading thing index from cache...");
   try {
-    const cached = await thingCacheFile.json();
+    // Use direct fs.readFile like area index does for consistency
+    const cacheContent = await fs.readFile(THING_INDEX_CACHE, 'utf-8');
+    const cached = JSON.parse(cacheContent);
+
+    // Handle both array and object formats (like area index does)
     if (Array.isArray(cached) && cached.length > 0) {
-      // Validate that cached data has the expected structure
-      const sampleEntry = cached[0];
-      if (sampleEntry && typeof sampleEntry.id === 'string' && typeof sampleEntry.name === 'string') {
-        thingIndex.push(...cached);
-        console.log(`✓ Loaded ${thingIndex.length} things from cache`);
+      // Array format - validate each entry
+      let validEntries = 0;
+      for (const entry of cached) {
+        if (entry && typeof entry === 'object' &&
+            typeof entry.id === 'string' && typeof entry.name === 'string') {
+          thingIndex.push(entry);
+          validEntries++;
+        }
+      }
+      if (validEntries > 0) {
+        console.log(`✓ Loaded ${validEntries} things from cache (array format)`);
       } else {
-        throw new Error("Invalid cache entry structure");
+        throw new Error("No valid entries found in cache");
+      }
+    } else if (cached && typeof cached === 'object') {
+      // Object format (if we ever change to that)
+      console.log("Thing cache in object format, converting to array...");
+      for (const [id, entry] of Object.entries(cached)) {
+        if (entry && typeof entry === 'object' &&
+            typeof (entry as any).name === 'string') {
+          thingIndex.push({
+            id: id,
+            name: (entry as any).name,
+            tags: (entry as any).tags || []
+          });
+        }
+      }
+      if (thingIndex.length > 0) {
+        console.log(`✓ Loaded ${thingIndex.length} things from cache (object format)`);
+      } else {
+        throw new Error("No valid entries found in object cache");
       }
     } else {
-      throw new Error("Invalid cache format or empty array");
+      throw new Error("Invalid cache format or empty");
     }
   } catch (error) {
-    console.log(`Thing cache invalid (${error.message}), rebuilding...`);
+    console.log(`Error loading thing cache (${error.message}), rebuilding...`);
+    // Log more details for debugging (like area index does)
+    try {
+      const rawContent = await fs.readFile(THING_INDEX_CACHE, 'utf-8');
+      console.log(`Cache file exists with size: ${rawContent.length} bytes`);
+      if (rawContent.length < 500) {
+        console.log(`Cache file content: ${rawContent.substring(0, 200)}...`);
+      }
+    } catch (debugError) {
+      console.log(`Could not read cache file for debugging: ${debugError.message}`);
+    }
   }
 }
 
@@ -791,17 +829,18 @@ if (thingIndex.length === 0) {
       throw new Error("No things were indexed");
     }
 
-    // Save to cache
+    // Save to cache (simple format like area index)
     try {
       await fs.mkdir("./cache", { recursive: true });
-      const jsonData = JSON.stringify(thingIndex, null, 2); // Pretty print for debugging
+      const jsonData = JSON.stringify(thingIndex); // Compact format, no pretty printing
       await fs.writeFile(THING_INDEX_CACHE, jsonData);
       console.log("✓ Thing index saved to cache");
 
-      // Verify the save worked
-      const verifyFile = createFileHandle(THING_INDEX_CACHE);
-      const verifyData = await verifyFile.json();
+      // Verify the save worked (like area index does)
+      const verifyContent = await fs.readFile(THING_INDEX_CACHE, 'utf-8');
+      const verifyData = JSON.parse(verifyContent);
       if (!Array.isArray(verifyData) || verifyData.length !== thingIndex.length) {
+        console.error("Cache verification failed - saved length:", thingIndex.length, "verified length:", verifyData?.length || 0);
         throw new Error("Cache verification failed");
       }
     } catch (saveError) {
