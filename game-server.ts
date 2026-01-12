@@ -386,6 +386,12 @@ async function ensureHomeArea(account: Record<string, any>) {
   const areaInfoPath = `./data/area/info/${account.homeAreaId}.json`;
   try {
     await fs.access(areaInfoPath);
+    // Ensure home area is in ownedAreas if it exists
+    if (!account.ownedAreas || !account.ownedAreas.includes(account.homeAreaId)) {
+      account.ownedAreas = [...(account.ownedAreas ?? []), account.homeAreaId];
+      await saveAccountData(account.screenName, account); // Save updated account
+      console.log(`[PROFILE] Added existing home area ${account.homeAreaId} to ${account.screenName}'s owned areas.`);
+    }
     return;
   } catch {
     console.log(`[PROFILE] Creating home area for ${account.screenName}`);
@@ -1341,7 +1347,63 @@ const app = new Elysia()
           try {
             const areaData = await file.json();
             console.log(`[AREA LOAD] ✅ Successfully loaded area ${areaId} (${areaData.areaName || 'unnamed'})`);
-            
+
+            // Track this area visit for the current user
+            if (areaData.areaName) {
+              // Trigger visit tracking asynchronously (don't block the area load)
+              setImmediate(async () => {
+                try {
+                  // Track per-user visited areas using the profile-specific account file
+                  if (currentActiveProfile) {
+                    const profileAccountPath = `./data/person/accounts/${currentActiveProfile}.json`;
+                    const accountData = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
+
+                    // Initialize visitedAreas if it doesn't exist
+                    if (!accountData.visitedAreas || !Array.isArray(accountData.visitedAreas)) {
+                      accountData.visitedAreas = [];
+                    }
+
+                    // Add to user's personal visited list if not already there
+                    const alreadyVisitedByUser = accountData.visitedAreas.some((a: any) => a.id === areaId);
+
+                    if (!alreadyVisitedByUser) {
+                      const visitEntry = {
+                        id: areaId,
+                        name: areaData.areaName,
+                        playerCount: 0,
+                        visitedAt: new Date().toISOString()
+                      };
+
+                      accountData.visitedAreas.push(visitEntry);
+
+                      // Keep only recent 200 areas to prevent bloat
+                      if (accountData.visitedAreas.length > 200) {
+                        accountData.visitedAreas = accountData.visitedAreas.slice(-200);
+                      }
+
+                      await fs.writeFile(profileAccountPath, JSON.stringify(accountData, null, 2));
+                      console.log(`[VISITED] ✅ Added area ${areaId} (${areaData.areaName}) to ${currentActiveProfile}'s visited list. Total: ${accountData.visitedAreas.length}`);
+                    } else {
+                      console.log(`[VISITED] Area ${areaId} already in ${currentActiveProfile}'s visited list`);
+                    }
+                  }
+
+                  // Also maintain global visited list for compatibility
+                  const listPath = "./data/area/arealist.json";
+                  const areaList = await getDynamicAreaList();
+                  const alreadyVisitedGlobal = areaList.visited?.some((a: any) => a.id === areaId);
+
+                  if (!alreadyVisitedGlobal) {
+                    areaList.visited = [...(areaList.visited ?? []), { id: areaId, name: areaData.areaName, playerCount: 0 }];
+                    await fs.writeFile(listPath, JSON.stringify(areaList, null, 2));
+                    console.log(`[VISITED] Added area ${areaId} (${areaData.areaName}) to global visited list.`);
+                  }
+                } catch (error) {
+                  console.error("[VISITED] Error tracking visit for area", areaId, ":", error);
+                }
+              });
+            }
+
             // Also verify the bundle exists
             const bundlePath = path.resolve("./data/area/bundle/", areaId, (areaData.areaKey || '') + ".json");
             const bundleFile = Bun.file(bundlePath);
