@@ -2209,13 +2209,54 @@ const app = new Elysia()
     const { areaId, name } = body;
     if (!areaId || !name) return new Response("Missing data", { status: 400 });
 
-    const listPath = "./data/area/arealist.json";
-    const areaList = await getDynamicAreaList();
-    const alreadyVisited = areaList.visited.some(a => a.id === areaId);
+    try {
+      // Track per-user visited areas
+      const accountPath = "./data/person/account.json";
+      const accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
 
-    if (!alreadyVisited) {
-      areaList.visited.push({ id: areaId, name, playerCount: 0 });
-      await fs.writeFile(listPath, JSON.stringify(areaList, null, 2));
+      // Initialize visitedAreas if it doesn't exist
+      if (!accountData.visitedAreas) {
+        accountData.visitedAreas = [];
+      }
+
+      // Add to user's personal visited list if not already there
+      const alreadyVisitedByUser = accountData.visitedAreas.some((a: any) => a.id === areaId);
+      if (!alreadyVisitedByUser) {
+        accountData.visitedAreas.push({
+          id: areaId,
+          name,
+          playerCount: 0,
+          visitedAt: new Date().toISOString()
+        });
+
+        // Keep only recent 200 areas to prevent bloat
+        if (accountData.visitedAreas.length > 200) {
+          accountData.visitedAreas = accountData.visitedAreas.slice(-200);
+        }
+
+        await fs.writeFile(accountPath, JSON.stringify(accountData, null, 2));
+      }
+
+      // Also maintain global visited list for compatibility
+      const listPath = "./data/area/arealist.json";
+      const areaList = await getDynamicAreaList();
+      const alreadyVisitedGlobal = areaList.visited?.some((a: any) => a.id === areaId);
+
+      if (!alreadyVisitedGlobal) {
+        areaList.visited = [...(areaList.visited ?? []), { id: areaId, name, playerCount: 0 }];
+        await fs.writeFile(listPath, JSON.stringify(areaList, null, 2));
+      }
+    } catch (error) {
+      console.error("Error tracking area visit:", error);
+      // Continue with just global tracking if user tracking fails
+      const listPath = "./data/area/arealist.json";
+      const areaList = await getDynamicAreaList();
+      const alreadyVisited = areaList.visited.some(a => a.id === areaId);
+
+      if (!alreadyVisited) {
+        areaList.visited.push({ id: areaId, name, playerCount: 0 });
+        await fs.writeFile(listPath, JSON.stringify(areaList, null, 2));
+      }
     }
 
     return { ok: true };

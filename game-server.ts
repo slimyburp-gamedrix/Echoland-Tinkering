@@ -1058,12 +1058,12 @@ const app = new Elysia()
           nextClientProfile = null; // Clear after use
         } else {
           // Wait for admin to assign one
-          const clientId = `client-${++pendingClientCounter}`;
-          console.log(`[AUTH] New client awaiting profile selection (client ${clientId})`);
-          profileName = await new Promise<string>((resolve) => {
-            pendingClients.push({ id: clientId, resolve, timestamp: new Date() });
-            notifyPendingChange();
-          });
+        const clientId = `client-${++pendingClientCounter}`;
+        console.log(`[AUTH] New client awaiting profile selection (client ${clientId})`);
+        profileName = await new Promise<string>((resolve) => {
+          pendingClients.push({ id: clientId, resolve, timestamp: new Date() });
+          notifyPendingChange();
+        });
         }
       }
 
@@ -1306,12 +1306,12 @@ const app = new Elysia()
         const filePath = path.resolve("./data/area/load/", areaId + ".json");
         const file = Bun.file(filePath);
         console.log(`[AREA LOAD] Checking file: ${filePath}`);
-
+        
         if (await file.exists()) {
           try {
             const areaData = await file.json();
             console.log(`[AREA LOAD] ✅ Successfully loaded area ${areaId} (${areaData.areaName || 'unnamed'})`);
-
+            
             // Also verify the bundle exists
             const bundlePath = path.resolve("./data/area/bundle/", areaId, (areaData.areaKey || '') + ".json");
             const bundleFile = Bun.file(bundlePath);
@@ -1344,7 +1344,7 @@ const app = new Elysia()
             } catch (err) {
               console.warn(`[AREA LOAD] Could not check edit permissions for area ${areaId}:`, err);
             }
-
+            
             return {
               ...areaData,
               forceEditMode: hasEditPermission,
@@ -2071,13 +2071,54 @@ const app = new Elysia()
     const { areaId, name } = body;
     if (!areaId || !name) return new Response("Missing data", { status: 400 });
 
-    const listPath = "./data/area/arealist.json";
-    const areaList = await getDynamicAreaList();
-    const alreadyVisited = areaList.visited.some(a => a.id === areaId);
+    try {
+      // Track per-user visited areas
+      const accountPath = "./data/person/account.json";
+      const accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
 
-    if (!alreadyVisited) {
-      areaList.visited.push({ id: areaId, name, playerCount: 0 });
-      await fs.writeFile(listPath, JSON.stringify(areaList, null, 2));
+      // Initialize visitedAreas if it doesn't exist
+      if (!accountData.visitedAreas) {
+        accountData.visitedAreas = [];
+      }
+
+      // Add to user's personal visited list if not already there
+      const alreadyVisitedByUser = accountData.visitedAreas.some((a: any) => a.id === areaId);
+      if (!alreadyVisitedByUser) {
+        accountData.visitedAreas.push({
+          id: areaId,
+          name,
+          playerCount: 0,
+          visitedAt: new Date().toISOString()
+        });
+
+        // Keep only recent 200 areas to prevent bloat
+        if (accountData.visitedAreas.length > 200) {
+          accountData.visitedAreas = accountData.visitedAreas.slice(-200);
+        }
+
+        await fs.writeFile(accountPath, JSON.stringify(accountData, null, 2));
+      }
+
+      // Also maintain global visited list for compatibility
+      const listPath = "./data/area/arealist.json";
+      const areaList = await getDynamicAreaList();
+      const alreadyVisitedGlobal = areaList.visited?.some((a: any) => a.id === areaId);
+
+      if (!alreadyVisitedGlobal) {
+        areaList.visited = [...(areaList.visited ?? []), { id: areaId, name, playerCount: 0 }];
+        await fs.writeFile(listPath, JSON.stringify(areaList, null, 2));
+      }
+    } catch (error) {
+      console.error("Error tracking area visit:", error);
+      // Continue with just global tracking if user tracking fails
+      const listPath = "./data/area/arealist.json";
+      const areaList = await getDynamicAreaList();
+      const alreadyVisited = areaList.visited.some(a => a.id === areaId);
+
+      if (!alreadyVisited) {
+        areaList.visited.push({ id: areaId, name, playerCount: 0 });
+        await fs.writeFile(listPath, JSON.stringify(areaList, null, 2));
+      }
     }
 
     return { ok: true };
@@ -2104,8 +2145,8 @@ const app = new Elysia()
     // Inject identity from account.json
     try {
       const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
-      parsed.placerId = account.personId || "unknown";
-      parsed.placerName = account.screenName || "anonymous";
+        parsed.placerId = account.personId || "unknown";
+        parsed.placerName = account.screenName || "anonymous";
     } catch {
       parsed.placerId = "unknown";
       parsed.placerName = "anonymous";
@@ -2181,8 +2222,8 @@ const app = new Elysia()
 
     try {
       const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
-      data.placerId = account.personId || "unknown";
-      data.placerName = account.screenName || "anonymous";
+        data.placerId = account.personId || "unknown";
+        data.placerName = account.screenName || "anonymous";
     } catch {
       data.placerId = "unknown";
       data.placerName = "anonymous";
@@ -2246,8 +2287,8 @@ const app = new Elysia()
 
     try {
       const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
-      parsed.placerId = account.personId || "unknown";
-      parsed.placerName = account.screenName || "anonymous";
+        parsed.placerId = account.personId || "unknown";
+        parsed.placerName = account.screenName || "anonymous";
     } catch {
       parsed.placerId = "unknown";
       parsed.placerName = "anonymous";
@@ -2296,8 +2337,8 @@ const app = new Elysia()
     let screenName = "anonymous";
     try {
       const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
-      personId = account.personId || personId;
-      screenName = account.screenName || screenName;
+        personId = account.personId || personId;
+        screenName = account.screenName || screenName;
     } catch { }
 
     const newPlacements = placements.map((encoded: string) => {
@@ -2874,8 +2915,8 @@ const app = new Elysia()
     let creatorName = "anonymous";
     try {
       const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
-      creatorId = account.personId || creatorId;
-      creatorName = account.screenName || creatorName;
+        creatorId = account.personId || creatorId;
+        creatorName = account.screenName || creatorName;
     } catch (e) {
       console.warn("⚠️ Could not load account.json for object metadata.", e);
     }
@@ -3522,11 +3563,11 @@ let debounceTimer;
 watch(areaFolder, { recursive: true }, (eventType, filename) => {
   // Only log if it's a relevant change (not just access events)
   if (eventType === 'change' && filename && filename.endsWith('.json')) {
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(async () => {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(async () => {
       console.log("[Area Watcher] Rebuilding area index due to file changes...");
       await rebuildAreaIndex();
-    }, 1000); // Wait 1 second after last change
+  }, 1000); // Wait 1 second after last change
   }
 });
 
