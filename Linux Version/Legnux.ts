@@ -430,6 +430,35 @@ async function ensureHomeArea(account: Record<string, any>) {
   const subareaPath = `./data/area/subareas/${areaId}.json`;
   await fs.writeFile(subareaPath, JSON.stringify({ subareas: [] }, null, 2));
 
+  // Update user's areasearch file so home area appears in created areas
+  try {
+    const areasearchPath = `./data/person/areasearch/${account.personId}.json`;
+
+    let areasearchData = { areas: [], ownPrivateAreas: [] };
+    try {
+      areasearchData = JSON.parse(await fs.readFile(areasearchPath, "utf-8"));
+    } catch {
+      // File doesn't exist, start with empty
+    }
+
+    // Add the home area to the user's areas list
+    const homeArea = {
+      id: areaId,
+      name: areaName,
+      playerCount: 0,
+      isPrivate: false
+    };
+
+    // Avoid duplicates
+    const exists = areasearchData.areas.some((a: any) => a.id === areaId);
+    if (!exists) {
+      areasearchData.areas.push(homeArea);
+      await fs.writeFile(areasearchPath, JSON.stringify(areasearchData, null, 2));
+    }
+  } catch (error) {
+    console.warn("Could not update user's areasearch file for home area:", error);
+  }
+
   const areaInfo = {
     editors: [
       {
@@ -1609,7 +1638,43 @@ const app = new Elysia()
 
       await fs.writeFile(filePath, JSON.stringify(sanitizedBody));
 
+      // Update user's areasearch file so their created areas appear in search
+      try {
+        // Use current active profile to get the correct account data
+        if (currentActiveProfile) {
+          const profileAccountPath = `./data/person/accounts/${currentActiveProfile}.json`;
+          const account = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
 
+          if (account.personId) {
+          const areasearchPath = `./data/person/areasearch/${account.personId}.json`;
+
+          let areasearchData = { areas: [], ownPrivateAreas: [] };
+          try {
+            areasearchData = JSON.parse(await fs.readFile(areasearchPath, "utf-8"));
+          } catch {
+            // File doesn't exist, start with empty
+          }
+
+          // Add the new area to the user's areas list
+          const newArea = {
+            id: areaId,
+            name: body.name || "Unnamed Area",
+            playerCount: 0,
+            isPrivate: false
+          };
+
+          // Avoid duplicates
+          const exists = areasearchData.areas.some((a: any) => a.id === areaId);
+          if (!exists) {
+            areasearchData.areas.push(newArea);
+            await fs.writeFile(areasearchPath, JSON.stringify(areasearchData, null, 2));
+            console.log(`[AREASEARCH] Added area ${areaId} (${body.name}) to ${currentActiveProfile}'s created areas list`);
+          }
+        }
+        }
+      } catch (error) {
+        console.warn("Could not update user's areasearch file:", error);
+      }
 
       areaIndex.push({
         name: body.name,
@@ -2210,31 +2275,49 @@ const app = new Elysia()
     if (!areaId || !name) return new Response("Missing data", { status: 400 });
 
     try {
-      // Track per-user visited areas
-      const accountPath = "./data/person/account.json";
-      const accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
+      // Track per-user visited areas using the profile-specific account file
+      if (!currentActiveProfile) {
+        console.log(`[VISITED] No active profile, falling back to global tracking`);
+        throw new Error("No active profile");
+      }
+
+      const profileAccountPath = `./data/person/accounts/${currentActiveProfile}.json`;
+      console.log(`[VISITED] Processing visit request for area ${areaId} (${name}) using profile: ${currentActiveProfile}`);
+
+      const accountData = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
+      console.log(`[VISITED] Current user: ${accountData.screenName} (${accountData.personId})`);
 
       // Initialize visitedAreas if it doesn't exist
-      if (!accountData.visitedAreas) {
+      if (!accountData.visitedAreas || !Array.isArray(accountData.visitedAreas)) {
         accountData.visitedAreas = [];
+        console.log(`[VISITED] Initialized visitedAreas array for user`);
       }
 
       // Add to user's personal visited list if not already there
       const alreadyVisitedByUser = accountData.visitedAreas.some((a: any) => a.id === areaId);
+      console.log(`[VISITED] User ${accountData.screenName} has ${alreadyVisitedByUser ? 'already' : 'not'} visited area ${areaId}`);
+
       if (!alreadyVisitedByUser) {
-        accountData.visitedAreas.push({
+        const visitEntry = {
           id: areaId,
           name,
           playerCount: 0,
           visitedAt: new Date().toISOString()
-        });
+        };
+
+        accountData.visitedAreas.push(visitEntry);
+        console.log(`[VISITED] Added visit entry:`, visitEntry);
 
         // Keep only recent 200 areas to prevent bloat
         if (accountData.visitedAreas.length > 200) {
           accountData.visitedAreas = accountData.visitedAreas.slice(-200);
+          console.log(`[VISITED] Trimmed visited list to 200 most recent entries`);
         }
 
-        await fs.writeFile(accountPath, JSON.stringify(accountData, null, 2));
+        await fs.writeFile(profileAccountPath, JSON.stringify(accountData, null, 2));
+        console.log(`[VISITED] ✅ Successfully updated ${accountData.screenName}'s visited list in profile ${currentActiveProfile}. Total areas visited: ${accountData.visitedAreas.length}`);
+      } else {
+        console.log(`[VISITED] Area ${areaId} already in ${accountData.screenName}'s visited list`);
       }
 
       // Also maintain global visited list for compatibility
