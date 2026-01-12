@@ -1696,36 +1696,45 @@ const app = new Elysia()
   .post("/area/lists", async () => {
     const dynamic = await getDynamicAreaList();
 
-    // Get current profile's owned areas for filtering "created" list
+    // Get current profile's owned areas for filtering "created" list and visited areas
     let ownedAreaIds: string[] = [];
     let homeAreaId: string | null = null;
-    
+    let userVisitedAreas: any[] = [];
+
     if (currentActiveProfile) {
       try {
-        const accountPath = await getAccountPath();
-        const accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
+        const profileAccountPath = `./data/person/accounts/${currentActiveProfile}.json`;
+        const accountData = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
         ownedAreaIds = accountData.ownedAreas || [];
         homeAreaId = accountData.homeAreaId;
-        
+        userVisitedAreas = accountData.visitedAreas || [];
+
         // Always include home area in owned list
         if (homeAreaId && !ownedAreaIds.includes(homeAreaId)) {
           ownedAreaIds.push(homeAreaId);
         }
+
+        console.log(`[AREA LIST] Loaded ${userVisitedAreas.length} visited areas for profile ${currentActiveProfile}`);
       } catch (e) {
         console.warn("[AREA LIST] Could not load profile for area filtering:", e);
+        // Fall back to global visited areas if profile can't be loaded
+        userVisitedAreas = [...canned_areaList.visited, ...dynamic.visited];
       }
+    } else {
+      // No active profile, fall back to global visited areas
+      userVisitedAreas = [...canned_areaList.visited, ...dynamic.visited];
     }
 
     // Combine all areas for "created" filtering
     const allCreated = [...canned_areaList.created, ...dynamic.created];
-    
+
     // Filter "created" to only show areas owned by current profile
     const userCreated = ownedAreaIds.length > 0
       ? allCreated.filter((area: any) => ownedAreaIds.includes(area.id))
       : []; // Empty if no profile or no owned areas
 
     return {
-      visited: [...canned_areaList.visited, ...dynamic.visited],
+      visited: userVisitedAreas,
       created: userCreated,
       newest: [...canned_areaList.newest, ...dynamic.newest],
       popular: [...canned_areaList.popular, ...dynamic.popular],
