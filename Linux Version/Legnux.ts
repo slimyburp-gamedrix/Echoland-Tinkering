@@ -623,7 +623,7 @@ if (await cacheFile.exists()) {
       // Old array format
       for (const area of cachedIndex) {
         if (area && typeof area === 'object' && area.name && area.id) {
-          const areaUrlName = area.name.replace(/[^-_a-z0-9]/g, "");
+          const areaUrlName = area.name.replace(/[^-_a-z0-9]/gi, "").toLowerCase();
           areaByUrlName.set(areaUrlName, area.id);
           areaIndex.push(area);
         }
@@ -639,7 +639,7 @@ if (await cacheFile.exists()) {
             description: areaData.description || "",
             playerCount: 0
           };
-          const areaUrlName = area.name.replace(/[^-_a-z0-9]/g, "");
+          const areaUrlName = area.name.replace(/[^-_a-z0-9]/gi, "").toLowerCase();
           areaByUrlName.set(areaUrlName, area.id);
           areaIndex.push(area);
         }
@@ -674,7 +674,7 @@ if (areaIndex.length === 0) {
       if (!areaInfo.name) throw new Error("Missing name field");
 
       const areaId = path.parse(filename).name;
-      const areaUrlName = areaInfo.name.replace(/[^-_a-z0-9]/g, "");
+      const areaUrlName = areaInfo.name.replace(/[^-_a-z0-9]/gi, "").toLowerCase();
 
       areaByUrlName.set(areaUrlName, areaId);
       areaIndex.push({
@@ -1483,7 +1483,7 @@ const app = new Elysia()
         if (await file.exists()) {
           try {
             const areaData = await file.json();
-            console.log(`[AREA LOAD] ✅ Successfully loaded area ${areaId} (${areaData.areaName || 'unnamed'})`);
+            console.log(`[AREA LOAD] ✅ Successfully loaded area ${areaId} (${areaData.areaName || areaData.name || 'unnamed'})`);
 
             // Track this area visit for the current user
             try {
@@ -1805,6 +1805,7 @@ const app = new Elysia()
       } catch { }
       const sanitizedBody = {
         ...body,
+        areaName: body.name || body.areaName || "Unnamed Area",
         creatorId
       };
 
@@ -1849,7 +1850,7 @@ const app = new Elysia()
         id: areaId,
         playerCount: 0
       });
-      areaByUrlName.set(body.name.replace(/[^-_a-z0-9]/g, ""), areaId);
+      areaByUrlName.set(body.name.replace(/[^-_a-z0-9]/gi, "").toLowerCase(), areaId);
       await fs.writeFile("./cache/areaIndex.json", JSON.stringify(areaIndex));
 
       return { ok: true, id: areaId };
@@ -2213,8 +2214,8 @@ const app = new Elysia()
     // ✅ Write subareas file
     await fs.writeFile(`${basePath}/subareas/${areaId}.json`, JSON.stringify({ subAreas: [] }, null, 2));
 
-    // ✅ Update areaindex.json
-    const indexPath = "./cache/areaindex.json";
+    // ✅ Update areaIndex.json
+    const indexPath = "./cache/areaIndex.json";
     let currentIndex: any[] = [];
     try {
       const indexFile = createFileHandle(indexPath);
