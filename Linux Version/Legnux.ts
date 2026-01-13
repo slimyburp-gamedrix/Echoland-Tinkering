@@ -1540,42 +1540,42 @@ const app = new Elysia()
             }
 
             // Also verify the bundle exists
-            const bundlePath = path.resolve("./data/area/bundle/", areaId, (areaData.areaKey || '') + ".json");
-            const bundleFile = createFileHandle(bundlePath);
-            const bundleExists = await bundleFile.exists();
-            console.log(`[AREA LOAD] Bundle ${areaData.areaKey} exists: ${bundleExists}`);
+            let bundleKey = areaData.areaKey;
+            if (!bundleKey) {
+              // Try to find bundle file if areaKey is missing
+              try {
+                const bundleDir = `./data/area/bundle/${areaId}`;
+                const files = await fs.readdir(bundleDir);
+                const jsonFile = files.find(f => f.endsWith('.json'));
+                if (jsonFile) {
+                  bundleKey = jsonFile.replace('.json', '');
+                  console.log(`[AREA LOAD] Found bundle key from file: ${bundleKey}`);
+                }
+              } catch {
+                // Directory doesn't exist or no files
+              }
+            }
 
-            // Check if current user has edit permissions
+            const bundlePath = path.resolve("./data/area/bundle/", areaId, (bundleKey || '') + ".json");
+            const bundleExists = await fs.access(bundlePath).then(() => true).catch(() => false);
+            console.log(`[AREA LOAD] Bundle ${bundleKey || 'undefined'} exists: ${bundleExists}`);
+
+            // Simple permission check - assume creator has edit permissions
             let hasEditPermission = false;
             let isOwner = false;
 
             try {
-              // Load current user account
               let currentUserId;
               if (currentActiveProfile) {
                 const profileAccountPath = `./data/person/accounts/${currentActiveProfile}.json`;
                 const account = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
                 currentUserId = account.personId;
               } else {
-                // Fallback to legacy account
                 const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
                 currentUserId = account.personId;
               }
-
-              // First try to check area info file (for areas that have them)
-              const areaInfoPath = path.resolve("./data/area/info/", areaId + ".json");
-              const areaInfoFile = createFileHandle(areaInfoPath);
-              if (await areaInfoFile.exists()) {
-                const areaInfo = await areaInfoFile.json();
-                // Check if user is in editors list
-                hasEditPermission = areaInfo.editors?.some((editor: any) => editor.id === currentUserId) || false;
-                isOwner = areaInfo.editors?.some((editor: any) => editor.id === currentUserId && editor.isOwner) || false;
-              } else {
-                // No area info file - check if user is the creator of this area
-                hasEditPermission = areaData.creatorId === currentUserId;
-                isOwner = areaData.creatorId === currentUserId;
-              }
-
+              hasEditPermission = areaData.creatorId === currentUserId || areaData.areaCreatorId === currentUserId;
+              isOwner = areaData.creatorId === currentUserId || areaData.areaCreatorId === currentUserId;
               console.log(`[AREA LOAD] User ${currentUserId} has edit permission: ${hasEditPermission}, is owner: ${isOwner}`);
             } catch (err) {
               console.warn(`[AREA LOAD] Could not check edit permissions for area ${areaId}:`, err);
@@ -1670,39 +1670,40 @@ const app = new Elysia()
               console.error("[VISITED] Error tracking visit for area", foundAreaId, ":", error);
             }
 
-            // Check if current user has edit permissions
+            // Simple permission check - assume creator has edit permissions
             let hasEditPermission = false;
             let isOwner = false;
 
             try {
-              // Load current user account
               const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
               const currentUserId = account.personId;
-
-              // First try to check area info file (for areas that have them)
-              const areaInfoPath = path.resolve("./data/area/info/", foundAreaId + ".json");
-              const areaInfo = JSON.parse(await fs.readFile(areaInfoPath, "utf-8"));
-              // Check if user is in editors list
-              hasEditPermission = areaInfo.editors?.some((editor: any) => editor.id === currentUserId) || false;
-              isOwner = areaInfo.editors?.some((editor: any) => editor.id === currentUserId && editor.isOwner) || false;
-
+              hasEditPermission = areaData.creatorId === currentUserId || areaData.areaCreatorId === currentUserId;
+              isOwner = areaData.creatorId === currentUserId || areaData.areaCreatorId === currentUserId;
               console.log(`[AREA LOAD] User ${currentUserId} has edit permission: ${hasEditPermission}, is owner: ${isOwner}`);
             } catch (err) {
-              // No area info file - check if user is the creator of this area
-              try {
-                const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
-                const currentUserId = account.personId;
-                hasEditPermission = areaData.creatorId === currentUserId;
-                isOwner = areaData.creatorId === currentUserId;
-              } catch (accountErr) {
-                console.warn(`[AREA LOAD] Could not check edit permissions for area ${foundAreaId}:`, err);
-              }
+              console.warn(`[AREA LOAD] Could not check edit permissions for area ${foundAreaId}:`, err);
             }
 
             // Also verify the bundle exists
-            const bundlePath = path.resolve("./data/area/bundle/", foundAreaId, (areaData.areaKey || '') + ".json");
+            let bundleKey = areaData.areaKey;
+            if (!bundleKey) {
+              // Try to find bundle file if areaKey is missing
+              try {
+                const bundleDir = `./data/area/bundle/${foundAreaId}`;
+                const files = await fs.readdir(bundleDir);
+                const jsonFile = files.find(f => f.endsWith('.json'));
+                if (jsonFile) {
+                  bundleKey = jsonFile.replace('.json', '');
+                  console.log(`[AREA LOAD] Found bundle key from file: ${bundleKey}`);
+                }
+              } catch {
+                // Directory doesn't exist or no files
+              }
+            }
+
+            const bundlePath = path.resolve("./data/area/bundle/", foundAreaId, (bundleKey || '') + ".json");
             const bundleExists = await fs.access(bundlePath).then(() => true).catch(() => false);
-            console.log(`[AREA LOAD] Bundle ${areaData.areaKey} exists: ${bundleExists}`);
+            console.log(`[AREA LOAD] Bundle ${bundleKey || 'undefined'} exists: ${bundleExists}`);
 
             return {
               ...areaData,
@@ -2690,6 +2691,7 @@ const app = new Elysia()
       parsed.placerName = "anonymous";
     }
 
+    await fs.mkdir(`./data/placement/info/${areaId}`, { recursive: true });
     await fs.writeFile(placementPath, JSON.stringify(parsed, null, 2));
 
     const areaFilePath = `./data/area/load/${areaId}.json`;
