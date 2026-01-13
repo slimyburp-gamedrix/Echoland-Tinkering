@@ -1550,31 +1550,33 @@ const app = new Elysia()
             let isOwner = false;
 
             try {
-              // Load area info to check editors
+              // Load current user account
+              let currentUserId;
+              if (currentActiveProfile) {
+                const profileAccountPath = `./data/person/accounts/${currentActiveProfile}.json`;
+                const account = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
+                currentUserId = account.personId;
+              } else {
+                // Fallback to legacy account
+                const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+                currentUserId = account.personId;
+              }
+
+              // First try to check area info file (for areas that have them)
               const areaInfoPath = path.resolve("./data/area/info/", areaId + ".json");
               const areaInfoFile = createFileHandle(areaInfoPath);
               if (await areaInfoFile.exists()) {
                 const areaInfo = await areaInfoFile.json();
-                // Load current user account from profile
-                let currentUserId;
-                if (currentActiveProfile) {
-                  const profileAccountPath = `./data/person/accounts/${currentActiveProfile}.json`;
-                  const account = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
-                  currentUserId = account.personId;
-                } else {
-                  // Fallback to legacy account
-                  const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
-                  currentUserId = account.personId;
-                }
-
                 // Check if user is in editors list
                 hasEditPermission = areaInfo.editors?.some((editor: any) => editor.id === currentUserId) || false;
                 isOwner = areaInfo.editors?.some((editor: any) => editor.id === currentUserId && editor.isOwner) || false;
-
-                console.log(`[AREA LOAD] User ${currentUserId} has edit permission: ${hasEditPermission}, is owner: ${isOwner}`);
               } else {
-                console.warn(`[AREA LOAD] Area info file not found for ${areaId}, defaulting to no edit permission`);
+                // No area info file - check if user is the creator of this area
+                hasEditPermission = areaData.creatorId === currentUserId;
+                isOwner = areaData.creatorId === currentUserId;
               }
+
+              console.log(`[AREA LOAD] User ${currentUserId} has edit permission: ${hasEditPermission}, is owner: ${isOwner}`);
             } catch (err) {
               console.warn(`[AREA LOAD] Could not check edit permissions for area ${areaId}:`, err);
             }
@@ -1673,21 +1675,28 @@ const app = new Elysia()
             let isOwner = false;
 
             try {
-              // Load area info to check editors
-              const areaInfoPath = path.resolve("./data/area/info/", foundAreaId + ".json");
-              const areaInfo = JSON.parse(await fs.readFile(areaInfoPath, "utf-8"));
               // Load current user account
-              const accountPath = "./data/person/account.json";
-              const account = JSON.parse(await fs.readFile(accountPath, "utf-8"));
+              const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
               const currentUserId = account.personId;
 
+              // First try to check area info file (for areas that have them)
+              const areaInfoPath = path.resolve("./data/area/info/", foundAreaId + ".json");
+              const areaInfo = JSON.parse(await fs.readFile(areaInfoPath, "utf-8"));
               // Check if user is in editors list
               hasEditPermission = areaInfo.editors?.some((editor: any) => editor.id === currentUserId) || false;
               isOwner = areaInfo.editors?.some((editor: any) => editor.id === currentUserId && editor.isOwner) || false;
 
               console.log(`[AREA LOAD] User ${currentUserId} has edit permission: ${hasEditPermission}, is owner: ${isOwner}`);
             } catch (err) {
-              console.warn(`[AREA LOAD] Could not check edit permissions for area ${foundAreaId}:`, err);
+              // No area info file - check if user is the creator of this area
+              try {
+                const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+                const currentUserId = account.personId;
+                hasEditPermission = areaData.creatorId === currentUserId;
+                isOwner = areaData.creatorId === currentUserId;
+              } catch (accountErr) {
+                console.warn(`[AREA LOAD] Could not check edit permissions for area ${foundAreaId}:`, err);
+              }
             }
 
             // Also verify the bundle exists
