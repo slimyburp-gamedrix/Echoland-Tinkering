@@ -1531,7 +1531,50 @@ const app = new Elysia()
               console.error("[VISITED] Error tracking visit for area", foundAreaId, ":", error);
             }
 
-            return areaData;
+            // Check if current user has edit permissions
+            let hasEditPermission = false;
+            let isOwner = false;
+
+            try {
+              // Load area info to check editors
+              const areaInfoPath = path.resolve("./data/area/info/", foundAreaId + ".json");
+              const areaInfoFile = Bun.file(areaInfoPath);
+              if (await areaInfoFile.exists()) {
+                const areaInfo = await areaInfoFile.json();
+                // Load current user account
+                const accountPath = "./data/person/account.json";
+                const account = JSON.parse(await fs.readFile(accountPath, "utf-8"));
+                const currentUserId = account.personId;
+
+                // Check if user is in editors list
+                hasEditPermission = areaInfo.editors?.some((editor: any) => editor.id === currentUserId) || false;
+                isOwner = areaInfo.editors?.some((editor: any) => editor.id === currentUserId && editor.isOwner) || false;
+
+                console.log(`[AREA LOAD] User ${currentUserId} has edit permission: ${hasEditPermission}, is owner: ${isOwner}`);
+              } else {
+                console.warn(`[AREA LOAD] Area info file not found for ${foundAreaId}, defaulting to no edit permission`);
+              }
+            } catch (err) {
+              console.warn(`[AREA LOAD] Could not check edit permissions for area ${foundAreaId}:`, err);
+            }
+
+            // Also verify the bundle exists
+            const bundlePath = path.resolve("./data/area/bundle/", foundAreaId, (areaData.areaKey || '') + ".json");
+            const bundleFile = Bun.file(bundlePath);
+            const bundleExists = await bundleFile.exists();
+            console.log(`[AREA LOAD] Bundle ${areaData.areaKey} exists: ${bundleExists}`);
+
+            return {
+              ...areaData,
+              requestorIsEditor: hasEditPermission,
+              requestorIsListEditor: hasEditPermission,
+              requestorIsOwner: isOwner,
+              hasEditTools: hasEditPermission,
+              hasEditToolsPermanently: hasEditPermission,
+              editToolsExpiryDate: hasEditPermission ? null : undefined,
+              isInEditToolsTrial: false,
+              wasEditToolsTrialEverActivated: false
+            };
           } else {
             console.error(`[AREA LOAD] ❌ Area in index but file missing: ${foundAreaId}`);
             return Response.json({ "ok": false, "_reasonDenied": "Private", "serveTime": 13 }, { status: 200 });
