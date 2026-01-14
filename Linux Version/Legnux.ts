@@ -478,7 +478,6 @@ async function ensureHomeArea(account: Record<string, any>) {
     listEditors: [],
     copiedFromAreas: [],
     name: areaName,
-    urlName: areaUrlName,
     creationDate: new Date().toISOString(),
     totalVisitors: 0,
     isZeroGravity: false,
@@ -641,10 +640,7 @@ if (await cacheFile.exists()) {
             description: areaData.description || "",
             playerCount: 0
           };
-          // ✅ Use urlName from cache if available, otherwise generate from name
-          const areaUrlName = (areaData.urlName && typeof areaData.urlName === 'string')
-            ? areaData.urlName.toLowerCase()
-            : area.name.replace(/[^-_a-z0-9]/gi, "").toLowerCase();
+          const areaUrlName = area.name.replace(/[^-_a-z0-9]/g, "");
           areaByUrlName.set(areaUrlName, area.id);
           areaIndex.push(area);
         }
@@ -2160,7 +2156,6 @@ const app = new Elysia()
       listEditors: [],
       copiedFromAreas: [],
       name: areaName,
-      urlName: areaUrlName,
       creationDate: timestamp,
       totalVisitors: 0,
       isZeroGravity: false,
@@ -4073,11 +4068,6 @@ async function rebuildAreaIndex() {
       try {
         const areaData = JSON.parse(content);
         const areaId = path.basename(file, ".json");
-
-        // ✅ Populate areaByUrlName map for URL name lookups
-        if (areaData.urlName) {
-          areaByUrlName.set(areaData.urlName.toLowerCase(), areaId);
-        }
 
         index[areaId] = {
           areaId,
