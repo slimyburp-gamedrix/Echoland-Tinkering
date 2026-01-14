@@ -641,7 +641,10 @@ if (await cacheFile.exists()) {
             description: areaData.description || "",
             playerCount: 0
           };
-          const areaUrlName = area.name.replace(/[^-_a-z0-9]/gi, "").toLowerCase();
+          // ✅ Use urlName from cache if available, otherwise generate from name
+          const areaUrlName = (areaData.urlName && typeof areaData.urlName === 'string')
+            ? areaData.urlName.toLowerCase()
+            : area.name.replace(/[^-_a-z0-9]/gi, "").toLowerCase();
           areaByUrlName.set(areaUrlName, area.id);
           areaIndex.push(area);
         }
