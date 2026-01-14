@@ -4071,6 +4071,11 @@ async function rebuildAreaIndex() {
         const areaData = JSON.parse(content);
         const areaId = path.basename(file, ".json");
 
+        // ✅ Populate areaByUrlName map for URL name lookups
+        if (areaData.urlName) {
+          areaByUrlName.set(areaData.urlName.toLowerCase(), areaId);
+        }
+
         index[areaId] = {
           areaId,
           urlName: areaData.urlName || null,
