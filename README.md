@@ -54,6 +54,30 @@ I take no responsibility if the server breaks or if you lose your in-game progre
 
 ---
 
+## Troubleshooting
+
+### Linux Permission Issues
+
+**Issue you might encounter:** On Linux systems, you may run into permission errors that prevent the server from writing files, causing "NOT FOUND" errors when trying to access areas after restarting the server.
+
+**Here's how to fix it:** Fix permissions on the entire Echoland folder (replace `username` with your Linux username):
+
+```bash
+# Change ownership of the entire folder
+sudo chown -R username:username .
+
+# Set proper permissions (choose one of these options):
+# Option 1: Standard permissions (recommended for security)
+sudo chmod -R 755 .
+
+# Option 2: Full permissions (if you still have issues)
+sudo chmod -R 777 .
+```
+
+This only happens on Linux systems - Windows has no such issues.
+
+---
+
 ## License
 
 This server is available under the [AGPL-3.0 license](https://www.gnu.org/licenses/agpl-3.0.en.html).
