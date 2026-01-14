@@ -465,6 +465,8 @@ async function ensureHomeArea(account: Record<string, any>) {
     console.warn("Could not update user's areasearch file for home area:", error);
   }
 
+  const areaUrlName = areaName.replace(/[^-_a-z0-9]/gi, "").toLowerCase();
+
   const areaInfo = {
     editors: [
       {
@@ -476,6 +478,7 @@ async function ensureHomeArea(account: Record<string, any>) {
     listEditors: [],
     copiedFromAreas: [],
     name: areaName,
+    urlName: areaUrlName,
     creationDate: new Date().toISOString(),
     totalVisitors: 0,
     isZeroGravity: false,
@@ -535,7 +538,6 @@ async function ensureHomeArea(account: Record<string, any>) {
   await injectInitialAreaToList(areaId, areaName);
 
   // ✅ Update in-memory area index (so home area is accessible without server restart)
-  const areaUrlName = areaName.replace(/[^-_a-z0-9]/gi, "").toLowerCase();
   areaIndex.push({
     name: areaName,
     description: "",
@@ -2147,12 +2149,15 @@ const app = new Elysia()
       R: { x: 0, y: 0, z: 0 }
     };
 
+    const areaUrlName = areaName.replace(/[^-_a-z0-9]/gi, "").toLowerCase();
+
     // ✅ Write info file
     await fs.writeFile(`${basePath}/info/${areaId}.json`, JSON.stringify({
       editors: [{ id: personId, name: personName, isOwner: true }],
       listEditors: [],
       copiedFromAreas: [],
       name: areaName,
+      urlName: areaUrlName,
       creationDate: timestamp,
       totalVisitors: 0,
       isZeroGravity: false,
@@ -2286,7 +2291,6 @@ const app = new Elysia()
     }
 
     // ✅ Update in-memory area index (so area is accessible without server restart)
-    const areaUrlName = areaName.replace(/[^-_a-z0-9]/gi, "").toLowerCase();
     areaIndex.push({
       name: areaName,
       description: "",
