@@ -59,7 +59,6 @@ const accountMutex = new AsyncMutex();
 const textEncoder = new TextEncoder();
 
 const ACCOUNTS_DIR = "./data/person/accounts";
-const LEGACY_ACCOUNT_PATH = "./data/person/account.json";
 
 // Track the currently active profile (for Unity clients that don't send cookies)
 let currentActiveProfile: string | null = null;
@@ -69,35 +68,6 @@ let nextClientProfile: string | null = null;
 
 function getAccountPathForProfile(profileName: string): string {
   return `${ACCOUNTS_DIR}/${profileName}.json`;
-}
-
-// Get the path to the account file - always use legacy path so sync works correctly
-async function getAccountPath(): Promise<string> {
-  return LEGACY_ACCOUNT_PATH;
-}
-
-// Sync legacy file to profile and vice versa
-async function syncProfileToLegacy(profileName: string): Promise<void> {
-  const profilePath = getAccountPathForProfile(profileName);
-  try {
-    const data = await fs.readFile(profilePath, "utf-8");
-    await fs.mkdir(path.dirname(LEGACY_ACCOUNT_PATH), { recursive: true });
-    await fs.writeFile(LEGACY_ACCOUNT_PATH, data);
-  } catch (e) {
-    console.warn(`[PROFILE] Could not sync ${profileName} to legacy:`, e);
-  }
-}
-
-async function syncLegacyToProfile(profileName: string): Promise<void> {
-  const profilePath = getAccountPathForProfile(profileName);
-  try {
-    const data = await fs.readFile(LEGACY_ACCOUNT_PATH, "utf-8");
-    await fs.mkdir(ACCOUNTS_DIR, { recursive: true });
-    await fs.writeFile(profilePath, data);
-    console.log(`[PROFILE] Saved data for ${profileName}`);
-  } catch (e) {
-    console.warn(`[PROFILE] Could not sync legacy to ${profileName}:`, e);
-  }
 }
 
 const HOST = process.env.HOST ?? "0.0.0.0";
@@ -3316,14 +3286,18 @@ const app = new Elysia()
     }
 
     // ✅ Load identity from account.json
-    let creatorId = "unknown";
-    let creatorName = "anonymous";
-    try {
-      const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
-      creatorId = account.personId || creatorId;
-      creatorName = account.screenName || creatorName;
-    } catch (e) {
-      console.warn("⚠️ Could not load account.json for object metadata.", e);
+    let creatorId = currentActiveProfile || "unknown";
+    let creatorName = currentActiveProfile || "anonymous";
+    // If a profile is active, try to load its personId and screenName
+    if (currentActiveProfile) {
+      try {
+        const profilePath = getAccountPathForProfile(currentActiveProfile);
+        const account = JSON.parse(await fs.readFile(profilePath, "utf-8"));
+        creatorId = account.personId || creatorId;
+        creatorName = account.screenName || creatorName;
+      } catch (e) {
+        console.warn(`⚠️ Could not load profile ${currentActiveProfile} for object metadata.`, e);
+      }
     }
 
     // ✅ Build thinginfo object
