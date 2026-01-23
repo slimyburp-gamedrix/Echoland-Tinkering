@@ -3156,9 +3156,9 @@ const app = new Elysia()
     }
 
     // ✅ Load identity from account.json
-    let creatorId = currentActiveProfile || "unknown";
-    let creatorName = currentActiveProfile || "anonymous";
-    // If a profile is active, try to load its personId and screenName
+    let creatorId = "unknown";
+    let creatorName = "anonymous";
+
     if (currentActiveProfile) {
       try {
         const profilePath = getAccountPathForProfile(currentActiveProfile);
@@ -3166,7 +3166,7 @@ const app = new Elysia()
         creatorId = account.personId || creatorId;
         creatorName = account.screenName || creatorName;
       } catch (e) {
-        console.warn(`⚠️ Could not load profile ${currentActiveProfile} for object metadata.`, e);
+        console.warn(`⚠️ Could not load active profile ${currentActiveProfile} for object metadata. Falling back to default values.`, e);
       }
     }
 
@@ -3727,43 +3727,27 @@ const app = new Elysia()
       updates: t.Record(t.String(), t.Any())
     })
   })
-  .post("/thing/topby", async () => {
-    // Return top things created by the current user
-    const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
-    const personId = account.personId;
-    const file = Bun.file(`./data/person/topby/${personId}.json`);
+  .post("/thing/topby",
+    async ({ body: { id, limit } }) => {
+      const file = Bun.file(path.resolve("./data/person/topby/", id + ".json"));
 
-    if (await file.exists()) {
-      const data = await file.json();
-      return new Response(JSON.stringify({ ids: data.ids.slice(0, 4) }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
-      });
-    } else {
-      return new Response(JSON.stringify({ ids: [] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
-      });
-    }
-  })
-  .post("/thing/topCreatedByPerson", async ({ body: { id } }) => {
-    const file = Bun.file(`./data/person/topby/${id}.json`);
-
-    if (await file.exists()) {
-      const data = await file.json();
-      return new Response(JSON.stringify({ ids: data.ids.slice(0, 4) }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
-      });
-    } else {
-      return new Response(JSON.stringify({ ids: [] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
-      });
-    }
-  }, {
-    body: t.Object({ id: t.String() })
-  })
+      if (await file.exists()) {
+        const diskData = await file.json();
+        const sliceLimit = limit ? parseInt(limit, 10) : 4;
+        return new Response(JSON.stringify({ ids: diskData.ids.slice(0, sliceLimit) }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      else {
+        return new Response(JSON.stringify({ ids: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+    },
+    { body: t.Object({ id: t.String(), limit: t.Optional(t.String()) }) }
+  )
   //.get("/thing/info/:thingId",
   //({params: { thingId }}) => Bun.file(path.resolve("./data/thing/info/", thingId + ".json")).json(),
   //)
