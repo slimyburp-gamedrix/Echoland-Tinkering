@@ -544,7 +544,11 @@ async function ensureHomeArea(account: Record<string, any>) {
     playerCount: 0
   });
   areaByUrlName.set(areaUrlName, areaId);
-  console.log(`[HOME AREA] ✅ Added home area ${areaId} to in-memory index`);
+
+  // ✅ Persist to cache file so home area survives server restarts
+  await fs.mkdir("./cache", { recursive: true });
+  await fs.writeFile("./cache/areaIndex.json", JSON.stringify(areaIndex));
+  console.log(`[HOME AREA] ✅ Added home area ${areaId} to in-memory index and persisted to cache`);
 
   console.log(`🌍 Created default home area for ${account.screenName}`);
 }
