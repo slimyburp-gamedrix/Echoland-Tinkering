@@ -637,27 +637,33 @@ function searchThings(term: string, limit: number = 0): string[] {
 // ==================== END THING SEARCH INDEX ====================
 
 // ✅ Inject default home area into arealist.json if not already present
-try {
-  const account = await getAccountDataForCurrentProfile();
-  const personId = account.personId;
-  const personName = account.screenName;
-  const defaultAreaId = account.homeAreaId;
-  const defaultAreaName = `${personName}'s home`;
-
-  const listPath = "./data/area/arealist.json";
-  let alreadyExists = false;
-
+// Only run if we have a valid active profile (not on fresh startup with no profiles)
+if (currentActiveProfile) {
   try {
-    const areaList = await Bun.file(listPath).json();
-    alreadyExists = areaList.created?.some((a: any) => a.id === defaultAreaId);
-  } catch { }
+    const account = await getAccountDataForCurrentProfile();
+    const personId = account.personId;
+    const personName = account.screenName;
+    const defaultAreaId = account.homeAreaId;
+    const defaultAreaName = `${personName}'s home`;
 
-  if (!alreadyExists) {
-    await injectInitialAreaToList(defaultAreaId, defaultAreaName);
-    console.log(`✅ Injected default area "${defaultAreaName}" into arealist.json`);
+    // Only inject if we have a valid homeAreaId (not empty) and valid screenName (not anonymous fallback)
+    if (defaultAreaId && personId !== "unknown" && personName !== "anonymous") {
+      const listPath = "./data/area/arealist.json";
+      let alreadyExists = false;
+
+      try {
+        const areaList = await Bun.file(listPath).json();
+        alreadyExists = areaList.created?.some((a: any) => a.id === defaultAreaId);
+      } catch { }
+
+      if (!alreadyExists) {
+        await injectInitialAreaToList(defaultAreaId, defaultAreaName);
+        console.log(`✅ Injected default area "${defaultAreaName}" into arealist.json`);
+      }
+    }
+  } catch {
+    // No legacy account yet – skip default area injection until a profile connects
   }
-} catch {
-  // No legacy account yet – skip default area injection until a profile connects
 }
 
 
