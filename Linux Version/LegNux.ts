@@ -88,7 +88,6 @@ const accountMutex = new AsyncMutex();
 const textEncoder = new TextEncoder();
 
 const ACCOUNTS_DIR = "./data/person/accounts";
-const LEGACY_ACCOUNT_PATH = "./data/person/account.json";
 
 // Track the currently active profile (for Unity clients that don't send cookies)
 let currentActiveProfile: string | null = null;
@@ -100,32 +99,40 @@ function getAccountPathForProfile(profileName: string): string {
   return `${ACCOUNTS_DIR}/${profileName}.json`;
 }
 
-// Get the path to the account file - always use legacy path so sync works correctly
+// Returns the account path for the current active profile
 async function getAccountPath(): Promise<string> {
-  return LEGACY_ACCOUNT_PATH;
+  if (!currentActiveProfile) {
+    throw new Error("No active profile set");
+  }
+  return getAccountPathForProfile(currentActiveProfile);
 }
 
-// Sync legacy file to profile and vice versa
-async function syncProfileToLegacy(profileName: string): Promise<void> {
-  const profilePath = getAccountPathForProfile(profileName);
+async function getAccountDataForCurrentProfile(): Promise<Record<string, any>> {
+  if (!currentActiveProfile) {
+    return {
+      personId: "unknown",
+      screenName: "anonymous",
+      homeAreaId: "",
+      attachments: {},
+      inventory: { pages: {} },
+      ownedAreas: []
+    };
+  }
+
+  const profilePath = getAccountPathForProfile(currentActiveProfile);
   try {
     const data = await fs.readFile(profilePath, "utf-8");
-    await mkdirWithPermissions(path.dirname(LEGACY_ACCOUNT_PATH));
-    await writeFileWithPermissions(LEGACY_ACCOUNT_PATH, data);
+    return JSON.parse(data);
   } catch (e) {
-    console.warn(`[PROFILE] Could not sync ${profileName} to legacy:`, e);
-  }
-}
-
-async function syncLegacyToProfile(profileName: string): Promise<void> {
-  const profilePath = getAccountPathForProfile(profileName);
-  try {
-    const data = await fs.readFile(LEGACY_ACCOUNT_PATH, "utf-8");
-    await mkdirWithPermissions(ACCOUNTS_DIR);
-    await writeFileWithPermissions(profilePath, data);
-    console.log(`[PROFILE] Saved data for ${profileName}`);
-  } catch (e) {
-    console.warn(`[PROFILE] Could not sync legacy to ${profileName}:`, e);
+    console.warn(`⚠️ Could not load profile ${currentActiveProfile}:`, e);
+    return {
+      personId: "unknown",
+      screenName: "anonymous",
+      homeAreaId: "",
+      attachments: {},
+      inventory: { pages: {} },
+      ownedAreas: []
+    };
   }
 }
 
@@ -215,162 +222,6 @@ async function injectInitialAreaToList(areaId: string, areaName: string) {
   areaList.totalSearchablePublicAreas = (areaList.totalSearchablePublicAreas ?? 0) + 1;
 
   await writeFileWithPermissions(listPath, JSON.stringify(areaList, null, 2));
-}
-
-// removed duplicate default imports; using namespace imports declared above
-
-async function initDefaults() {
-  const accountPath = "./data/person/account.json";
-
-  let accountData: Record<string, any> = {};
-  try {
-    accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
-  } catch {
-    // Create new identity
-    const personId = randomUUID().replace(/-/g, "").slice(0, 24);
-    const screenName = "User" + Math.floor(Math.random() * 10000);
-    const homeAreaId = randomUUID().replace(/-/g, "").slice(0, 24);
-
-    accountData = {
-      personId,
-      screenName,
-      homeAreaId,
-      attachments: {}
-    };
-
-    await mkdirWithPermissions("./data/person");
-    await writeFileWithPermissions(accountPath, JSON.stringify(accountData, null, 2));
-    console.log(`🧠 Memory card initialized for ${screenName}`);
-  }
-
-  // Ensure required fields exist for existing accounts
-  let needsUpdate = false;
-  if (!accountData.attachments) {
-    accountData.attachments = {};
-    needsUpdate = true;
-  }
-  
-  // Save updated account data if needed
-  if (needsUpdate) {
-    await writeFileWithPermissions(accountPath, JSON.stringify(accountData, null, 2));
-    console.log(`🔄 Updated account data with missing fields`);
-  }
-
-  // Create person info file
-  const infoPath = `./data/person/info/${accountData.personId}.json`;
-  try {
-    await fs.access(infoPath);
-  } catch {
-    const personInfo = {
-      id: accountData.personId,
-      screenName: accountData.screenName,
-      age: 0,
-      statusText: "",
-      isFindable: true,
-      isBanned: false,
-      lastActivityOn: new Date().toISOString(),
-      isFriend: false,
-      isEditorHere: true,
-      isListEditorHere: true,
-      isOwnerHere: true,
-      isAreaLocked: false,
-      isOnline: true
-    };
-
-    await mkdirWithPermissions("./data/person/info");
-    await writeFileWithPermissions(infoPath, JSON.stringify(personInfo, null, 2));
-    console.log(`📇 Created person info file for ${accountData.screenName}`);
-  }
-  // Check if home area already exists
-  const areaInfoPath = `./data/area/info/${accountData.homeAreaId}.json`;
-
-  try {
-    await fs.access(areaInfoPath);
-    console.log(`✅ Home area already exists for ${accountData.screenName}, skipping creation`);
-    return; // Exit early, skip creating area again
-  } catch {
-    console.log(`🆕 Creating home area for ${accountData.screenName}`);
-  }
-
-  // Create default home area
-  const areaId = accountData.homeAreaId;
-  const areaName = `${accountData.screenName}'s home`;
-  const areaKey = `rr${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-  const initDefaultsBundleFolder = `./data/area/bundle/${areaId}`;
-  await mkdirWithPermissions(initDefaultsBundleFolder);
-  const initDefaultsBundlePath = `${initDefaultsBundleFolder}/${areaKey}.json`;
-  await writeFileWithPermissions(initDefaultsBundlePath, JSON.stringify({ thingDefinitions: [], serveTime: 0 }, null, 2));
-  const subareaPath = `./data/area/subareas/${areaId}.json`;
-  await writeFileWithPermissions(subareaPath, JSON.stringify({ subareas: [] }, null, 2));
-
-  const areaInfo = {
-    editors: [
-      {
-        id: accountData.personId,
-        name: accountData.screenName,
-        isOwner: true
-      }
-    ],
-    listEditors: [],
-    copiedFromAreas: [],
-    name: areaName,
-    creationDate: new Date().toISOString(),
-    totalVisitors: 0,
-    isZeroGravity: false,
-    hasFloatingDust: false,
-    isCopyable: false,
-    isExcluded: false,
-    renameCount: 0,
-    copiedCount: 0,
-    isFavorited: false
-  };
-
-  const areaLoad = {
-    ok: true,
-    areaId,
-    areaName,
-    areaKey,
-    areaCreatorId: accountData.personId,
-    isPrivate: false,
-    isZeroGravity: false,
-    hasFloatingDust: false,
-    isCopyable: false,
-    onlyOwnerSetsLocks: false,
-    isExcluded: false,
-    environmentChangersJSON: JSON.stringify({ environmentChangers: [] }),
-    requestorIsEditor: true,
-    requestorIsListEditor: true,
-    requestorIsOwner: true,
-    placements: [
-      {
-        Id: randomUUID().replace(/-/g, "").slice(0, 24),
-        Tid: "000000000000000000000001", // Ground object ID
-        P: { x: 0, y: -0.3, z: 0 },
-        R: { x: 0, y: 0, z: 0 }
-      }
-    ],
-    serveTime: 17
-  };
-
-  const areaBundle = {
-    thingDefinitions: [],
-    serveTime: 3
-  };
-
-  await mkdirWithPermissions(`./data/area/info`);
-  await mkdirWithPermissions(`./data/area/load`);
-  await mkdirWithPermissions(`./data/area/bundle`);
-
-  await writeFileWithPermissions(`./data/area/info/${areaId}.json`, JSON.stringify(areaInfo, null, 2));
-  await writeFileWithPermissions(`./data/area/load/${areaId}.json`, JSON.stringify(areaLoad, null, 2));
-
-  // Create bundle in subfolder with proper structure: bundle/{areaId}/{bundleKey}.json
-  const ensureHomeAreaBundleFolder = `./data/area/bundle/${areaId}`;
-  await mkdirWithPermissions(ensureHomeAreaBundleFolder);
-  const ensureHomeAreaBundlePath = `${ensureHomeAreaBundleFolder}/${areaKey}.json`;
-  await writeFileWithPermissions(ensureHomeAreaBundlePath, JSON.stringify(areaBundle, null, 2));
-
-  console.log(`🌍 Created default home area for ${accountData.screenName}`);
 }
 
 async function listProfiles(): Promise<string[]> {
@@ -939,27 +790,33 @@ function searchThings(term: string, limit: number = 0): string[] {
 // ==================== END THING SEARCH INDEX ====================
 
 // ✅ Inject default home area into arealist.json if not already present
-try {
-  const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
-  const personId = account.personId;
-  const personName = account.screenName;
-  const defaultAreaId = account.homeAreaId;
-  const defaultAreaName = `${personName}'s home`;
-
-  const listPath = "./data/area/arealist.json";
-  let alreadyExists = false;
-
+// Only run if we have a valid active profile (not on fresh startup with no profiles)
+if (currentActiveProfile) {
   try {
-    const areaList = await createFileHandle(listPath).json();
-    alreadyExists = areaList.created?.some((a: any) => a.id === defaultAreaId);
-  } catch { }
+    const account = await getAccountDataForCurrentProfile();
+    const personId = account.personId;
+    const personName = account.screenName;
+    const defaultAreaId = account.homeAreaId;
+    const defaultAreaName = `${personName}'s home`;
 
-  if (!alreadyExists) {
-    await injectInitialAreaToList(defaultAreaId, defaultAreaName);
-    console.log(`✅ Injected default area "${defaultAreaName}" into arealist.json`);
+    // Only inject if we have a valid homeAreaId (not empty) and valid screenName (not anonymous fallback)
+    if (defaultAreaId && personId !== "unknown" && personName !== "anonymous") {
+      const listPath = "./data/area/arealist.json";
+      let alreadyExists = false;
+
+      try {
+        const areaList = await createFileHandle(listPath).json();
+        alreadyExists = areaList.created?.some((a: any) => a.id === defaultAreaId);
+      } catch { }
+
+      if (!alreadyExists) {
+        await injectInitialAreaToList(defaultAreaId, defaultAreaName);
+        console.log(`✅ Injected default area "${defaultAreaName}" into arealist.json`);
+      }
+    }
+  } catch {
+    // No legacy account yet – skip default area injection until a profile connects
   }
-} catch {
-  // No legacy account yet – skip default area injection until a profile connects
 }
 
 
@@ -1278,7 +1135,6 @@ const app = new Elysia()
       // If there was a previous active profile, save its data first
       if (currentActiveProfile && currentActiveProfile !== profileName) {
         console.log(`[AUTH] Switching from profile ${currentActiveProfile} to ${profileName}`);
-        await syncLegacyToProfile(currentActiveProfile);
       }
 
       // Setup the new profile
@@ -1289,7 +1145,6 @@ const app = new Elysia()
       console.log(`[AUTH] ✅ Active profile set to: ${profileName}`);
       
       // Sync profile data to legacy file (for endpoints that read from it)
-      await syncProfileToLegacy(profileName);
       
       // Notify admin panel of profile change
       notifyProfileChange();
@@ -1446,7 +1301,6 @@ const app = new Elysia()
         
         // Also persist to profile file if there's an active profile
         if (currentActiveProfile) {
-          await syncLegacyToProfile(currentActiveProfile);
         }
       } catch (e) {
         console.error("[ATTACHMENT] Failed to write account:", e);
@@ -1496,7 +1350,6 @@ const app = new Elysia()
     
     // Also persist to profile file if there's an active profile
     if (currentActiveProfile) {
-      await syncLegacyToProfile(currentActiveProfile);
     }
 
     return new Response(JSON.stringify({ ok: true }), {
@@ -1606,7 +1459,7 @@ const app = new Elysia()
                 const account = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
                 currentUserId = account.personId;
               } else {
-                const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+                const account = await getAccountDataForCurrentProfile();
                 currentUserId = account.personId;
               }
               hasEditPermission = areaData.creatorId === currentUserId || areaData.areaCreatorId === currentUserId;
@@ -1710,7 +1563,7 @@ const app = new Elysia()
             let isOwner = false;
 
             try {
-              const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+              const account = await getAccountDataForCurrentProfile();
               const currentUserId = account.personId;
               hasEditPermission = areaData.creatorId === currentUserId || areaData.areaCreatorId === currentUserId;
               isOwner = areaData.creatorId === currentUserId || areaData.areaCreatorId === currentUserId;
@@ -1835,7 +1688,7 @@ const app = new Elysia()
       // Align creator identity with account.json (same as /area route)
       let creatorId = body.creatorId;
       try {
-        const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+        const account = await getAccountDataForCurrentProfile();
         if (account?.personId) creatorId = account.personId;
       } catch { }
       const sanitizedBody = {
@@ -1848,7 +1701,7 @@ const app = new Elysia()
 
       // Update user's areasearch file so their created areas appear in search
       try {
-        const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+        const account = await getAccountDataForCurrentProfile();
         if (account.personId) {
           const areasearchPath = `./data/person/areasearch/${account.personId}.json`;
 
@@ -2152,7 +2005,7 @@ const app = new Elysia()
     let personName: string;
 
     try {
-      const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+      const account = await getAccountDataForCurrentProfile();
       personId = account.personId;
       personName = account.screenName;
 
@@ -2317,7 +2170,6 @@ const app = new Elysia()
       
       // Persist to profile file
       if (currentActiveProfile) {
-        await syncLegacyToProfile(currentActiveProfile);
       }
     } catch {
       console.warn("⚠️ Could not update account.json with new owned area.");
@@ -2584,7 +2436,7 @@ const app = new Elysia()
 
     // Inject identity from account.json
     try {
-      const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+      const account = await getAccountDataForCurrentProfile();
       parsed.placerId = account.personId || "unknown";
       parsed.placerName = account.screenName || "anonymous";
     } catch {
@@ -2661,7 +2513,7 @@ const app = new Elysia()
     }
 
     try {
-      const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+      const account = await getAccountDataForCurrentProfile();
       data.placerId = account.personId || "unknown";
       data.placerName = account.screenName || "anonymous";
     } catch {
@@ -2726,7 +2578,7 @@ const app = new Elysia()
     const placementPath = `./data/placement/info/${areaId}/${placementId}.json`;
 
     try {
-      const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+      const account = await getAccountDataForCurrentProfile();
       parsed.placerId = account.personId || "unknown";
       parsed.placerName = account.screenName || "anonymous";
     } catch {
@@ -2777,7 +2629,7 @@ const app = new Elysia()
     let personId = "unknown";
     let screenName = "anonymous";
     try {
-      const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+      const account = await getAccountDataForCurrentProfile();
       personId = account.personId || personId;
       screenName = account.screenName || screenName;
     } catch { }
@@ -3085,7 +2937,6 @@ const app = new Elysia()
     
     // Persist to profile file if there's an active profile
     if (currentActiveProfile) {
-      await syncLegacyToProfile(currentActiveProfile);
     }
 
     return new Response(JSON.stringify({ ok: true }), {
@@ -3150,7 +3001,6 @@ const app = new Elysia()
     
     // Persist to profile file if there's an active profile
     if (currentActiveProfile) {
-      await syncLegacyToProfile(currentActiveProfile);
     }
 
     const personId = accountData.personId || "unknown";
@@ -3214,7 +3064,6 @@ const app = new Elysia()
     
     // Persist to profile file if there's an active profile
     if (currentActiveProfile) {
-      await syncLegacyToProfile(currentActiveProfile);
     }
 
     const personId = accountData.personId || "unknown";
@@ -3314,7 +3163,6 @@ const app = new Elysia()
     
     // Persist to profile file if there's an active profile
     if (currentActiveProfile) {
-      await syncLegacyToProfile(currentActiveProfile);
     }
 
     return new Response(JSON.stringify({ ok: true }), {
@@ -3355,7 +3203,7 @@ const app = new Elysia()
     let creatorId = "unknown";
     let creatorName = "anonymous";
     try {
-      const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
+      const account = await getAccountDataForCurrentProfile();
       creatorId = account.personId || creatorId;
       creatorName = account.screenName || creatorName;
     } catch (e) {
@@ -3919,25 +3767,27 @@ const app = new Elysia()
       updates: t.Record(t.String(), t.Any())
     })
   })
-  .post("/thing/topby", async () => {
-    // Return top things created by the current user
-    const account = JSON.parse(await fs.readFile("./data/person/account.json", "utf-8"));
-    const personId = account.personId;
-    const file = createFileHandle(`./data/person/topby/${personId}.json`);
+  .post("/thing/topby",
+    async ({ body: { id, limit } }) => {
+      const file = createFileHandle(path.resolve("./data/person/topby/", id + ".json"));
 
-    if (await file.exists()) {
-      const data = await file.json();
-      return new Response(JSON.stringify({ ids: data.ids.slice(0, 4) }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
-      });
-    } else {
-      return new Response(JSON.stringify({ ids: [] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
-      });
-    }
-  })
+      if (await file.exists()) {
+        const diskData = await file.json();
+        const sliceLimit = limit ? parseInt(limit, 10) : 4;
+        return new Response(JSON.stringify({ ids: diskData.ids.slice(0, sliceLimit) }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      else {
+        return new Response(JSON.stringify({ ids: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+    },
+    { body: t.Object({ id: t.String(), limit: t.Optional(t.String()) }) }
+  )
   .post("/thing/topCreatedByPerson", async ({ body: { id } }) => {
     const file = createFileHandle(`./data/person/topby/${id}.json`);
 
