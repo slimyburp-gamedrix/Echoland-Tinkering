@@ -1945,11 +1945,10 @@ const app = new Elysia()
     };
   })
   .get("/repair-home-area", async () => {
-    const accountPath = "./data/person/account.json";
     const areaBase = "./data/area";
 
     try {
-      const account = JSON.parse(await fs.readFile(accountPath, "utf-8"));
+      const account = await getAccountDataForCurrentProfile();
       const homeId = account.homeAreaId;
       if (!homeId) return new Response("No homeAreaId found", { status: 400 });
 
