@@ -2427,6 +2427,71 @@ const app = new Elysia()
 				areaByUrlName.set(areaUrlName, areaId);
 			}
 			
+			// Update profile's visitedAreas list
+			if (currentActiveProfile) {
+				try {
+					const profilePath = `./data/person/accounts/${currentActiveProfile}.json`;
+					const profileFile = createFileHandle(profilePath);
+					if (await profileFile.exists()) {
+						const profileData = await profileFile.json();
+						if (profileData.visitedAreas && Array.isArray(profileData.visitedAreas)) {
+							const visitedEntry = profileData.visitedAreas.find((a: any) => a.id === areaId);
+							if (visitedEntry) {
+								visitedEntry.name = trimmedName;
+								await writeFileWithPermissions(profilePath, JSON.stringify(profileData, null, 2));
+								console.log(`[AREA RENAME] Updated profile visitedAreas for ${currentActiveProfile}`);
+							}
+						}
+					}
+				} catch (profileError) {
+					console.warn(`[AREA RENAME] Could not update profile visitedAreas:`, profileError);
+				}
+			}
+			
+			// Update general arealist.json
+			try {
+				const arealistPath = "./data/area/arealist.json";
+				const arealistFile = createFileHandle(arealistPath);
+				if (await arealistFile.exists()) {
+					const arealistData = await arealistFile.json();
+					let updated = false;
+					
+					// Update in visited array
+					if (arealistData.visited && Array.isArray(arealistData.visited)) {
+						const visitedEntry = arealistData.visited.find((a: any) => a.id === areaId);
+						if (visitedEntry) {
+							visitedEntry.name = trimmedName;
+							updated = true;
+						}
+					}
+					
+					// Update in created array
+					if (arealistData.created && Array.isArray(arealistData.created)) {
+						const createdEntry = arealistData.created.find((a: any) => a.id === areaId);
+						if (createdEntry) {
+							createdEntry.name = trimmedName;
+							updated = true;
+						}
+					}
+					
+					// Update in newest array
+					if (arealistData.newest && Array.isArray(arealistData.newest)) {
+						const newestEntry = arealistData.newest.find((a: any) => a.id === areaId);
+						if (newestEntry) {
+							newestEntry.name = trimmedName;
+							updated = true;
+						}
+					}
+					
+					if (updated) {
+						await writeFileWithPermissions(arealistPath, JSON.stringify(arealistData, null, 2));
+						console.log(`[AREA RENAME] Updated arealist.json`);
+					}
+				}
+			} catch (arealistError) {
+				console.warn(`[AREA RENAME] Could not update arealist.json:`, arealistError);
+			}
+			
 			console.log(`[AREA RENAME] Renamed area ${areaId} from "${oldName}" to "${trimmedName}"`);
 			
 			return new Response(JSON.stringify({ ok: true }), {
