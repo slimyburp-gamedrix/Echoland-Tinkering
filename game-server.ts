@@ -2453,7 +2453,8 @@ const app = new Elysia()
 		type: "form"
 	})
 	.post("/area/seteditor", async ({ body }) => {
-		const { areaId, personId, isEditor } = body as any;
+		const { areaId, userId, isEditor } = body as any;
+		const personId = userId; // Client sends userId, we use personId internally
 		
 		if (!areaId || !personId) {
 			return new Response(JSON.stringify({ ok: false, error: "Missing areaId or personId" }), { 
@@ -2537,7 +2538,7 @@ const app = new Elysia()
 	}, {
 		body: t.Object({
 			areaId: t.String(),
-			personId: t.String(),
+			userId: t.String(),
 			isEditor: t.Optional(t.String())
 		}),
 		type: "form"
