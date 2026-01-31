@@ -2910,7 +2910,55 @@ const app = new Elysia()
   )
   .post("/person/infobasic",
     async ({ body: { areaId, userId } }) => {
-      return { "isEditorHere": false }
+      // Get info about whether the target user (userId) is an editor of this area
+      // and whether the current requestor is the owner (can grant editor rights)
+      
+      let isEditorHere = false;
+      let isListEditorHere = false;
+      let isOwnerHere = false;
+      let requestorIsOwner = false;
+      
+      try {
+        // Load area info to check editors
+        const areaInfoPath = `./data/area/info/${areaId}.json`;
+        const areaInfoFile = Bun.file(areaInfoPath);
+        
+        if (await areaInfoFile.exists()) {
+          const areaInfo = await areaInfoFile.json();
+          
+          // Check if target user is an editor
+          if (areaInfo.editors && Array.isArray(areaInfo.editors)) {
+            const editorEntry = areaInfo.editors.find((e: any) => e.id === userId);
+            if (editorEntry) {
+              isEditorHere = true;
+              isOwnerHere = editorEntry.isOwner === true;
+            }
+          }
+          
+          // Check if target user is a list editor
+          if (areaInfo.listEditors && Array.isArray(areaInfo.listEditors)) {
+            isListEditorHere = areaInfo.listEditors.some((e: any) => e.id === userId);
+          }
+          
+          // Check if current requestor is the owner
+          const account = await getAccountDataForCurrentProfile();
+          if (account.personId && areaInfo.editors && Array.isArray(areaInfo.editors)) {
+            const requestorEntry = areaInfo.editors.find((e: any) => e.id === account.personId);
+            requestorIsOwner = requestorEntry?.isOwner === true;
+          }
+        }
+      } catch (err) {
+        console.warn(`[PERSON INFOBASIC] Error checking editor status for ${userId} in area ${areaId}:`, err);
+      }
+      
+      console.log(`[PERSON INFOBASIC] User ${userId} in area ${areaId}: isEditor=${isEditorHere}, isOwner=${isOwnerHere}, requestorIsOwner=${requestorIsOwner}`);
+      
+      return { 
+        isEditorHere, 
+        isListEditorHere, 
+        isOwnerHere,
+        requestorIsOwner
+      };
     },
     { body: t.Object({ areaId: t.String(), userId: t.String() }) }
   )
