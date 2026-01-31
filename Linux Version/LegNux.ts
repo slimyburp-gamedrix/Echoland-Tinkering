@@ -142,6 +142,114 @@ const PORT_CDN_THINGDEFS = Number(process.env.PORT_CDN_THINGDEFS ?? 8001);
 const PORT_CDN_AREABUNDLES = Number(process.env.PORT_CDN_AREABUNDLES ?? 8002);
 const PORT_CDN_UGCIMAGES = Number(process.env.PORT_CDN_UGCIMAGES ?? 8003);
 
+// ============ PLAYER PRESENCE TRACKING ============
+// Tracks which players are in which areas with timeout
+const PRESENCE_TIMEOUT_MS = 30000; // 30 seconds without ping = player left
+
+interface PlayerPresence {
+  personId: string;
+  profileName: string;
+  areaId: string;
+  lastPing: number;
+}
+
+// Map of personId -> PlayerPresence
+const playerPresence = new Map<string, PlayerPresence>();
+
+// Get player count for a specific area
+function getAreaPlayerCount(areaId: string): number {
+  const now = Date.now();
+  let count = 0;
+  for (const presence of playerPresence.values()) {
+    if (presence.areaId === areaId && (now - presence.lastPing) < PRESENCE_TIMEOUT_MS) {
+      count++;
+    }
+  }
+  return count;
+}
+
+// Get list of areas with players, sorted by player count (descending)
+function getLivelyAreas(): { id: string; name: string; playerCount: number }[] {
+  const now = Date.now();
+  const areaPlayerCounts = new Map<string, number>();
+  
+  // Count active players per area
+  for (const presence of playerPresence.values()) {
+    if ((now - presence.lastPing) < PRESENCE_TIMEOUT_MS) {
+      const count = areaPlayerCounts.get(presence.areaId) || 0;
+      areaPlayerCounts.set(presence.areaId, count + 1);
+    }
+  }
+  
+  // Build lively areas list
+  const livelyAreas: { id: string; name: string; playerCount: number }[] = [];
+  for (const [areaId, playerCount] of areaPlayerCounts.entries()) {
+    if (playerCount > 0) {
+      const indexEntry = areaIndex.find(a => a.id === areaId);
+      livelyAreas.push({
+        id: areaId,
+        name: indexEntry?.name || "Unknown Area",
+        playerCount
+      });
+    }
+  }
+  
+  // Sort by player count descending
+  livelyAreas.sort((a, b) => b.playerCount - a.playerCount);
+  return livelyAreas;
+}
+
+// Update player presence (call on /p ping)
+function updatePlayerPresence(personId: string, profileName: string, areaId: string): void {
+  const existing = playerPresence.get(personId);
+  const now = Date.now();
+  
+  if (existing && existing.areaId !== areaId) {
+    console.log(`[PRESENCE] ${profileName} moved from area ${existing.areaId} to ${areaId}`);
+  } else if (!existing) {
+    console.log(`[PRESENCE] ${profileName} entered area ${areaId}`);
+  }
+  
+  playerPresence.set(personId, {
+    personId,
+    profileName,
+    areaId,
+    lastPing: now
+  });
+}
+
+// Clean up stale presence entries (run periodically)
+function cleanupStalePresence(): void {
+  const now = Date.now();
+  let removed = 0;
+  for (const [personId, presence] of playerPresence.entries()) {
+    if ((now - presence.lastPing) >= PRESENCE_TIMEOUT_MS) {
+      console.log(`[PRESENCE] ${presence.profileName} timed out from area ${presence.areaId}`);
+      playerPresence.delete(personId);
+      removed++;
+    }
+  }
+  if (removed > 0) {
+    console.log(`[PRESENCE] Cleaned up ${removed} stale entries, ${playerPresence.size} active players`);
+  }
+}
+
+// Get total online players
+function getTotalOnlinePlayers(): number {
+  const now = Date.now();
+  let count = 0;
+  for (const presence of playerPresence.values()) {
+    if ((now - presence.lastPing) < PRESENCE_TIMEOUT_MS) {
+      count++;
+    }
+  }
+  return count;
+}
+
+// Run cleanup every 15 seconds
+setInterval(cleanupStalePresence, 15000);
+// ============ END PLAYER PRESENCE TRACKING ============
+
 const getDynamicAreaList = async () => {
   const arealistPath = "./data/area/arealist.json";
   try {
@@ -1357,7 +1465,23 @@ const app = new Elysia()
       headers: { "Content-Type": "application/json" }
     });
   })
-  .post("/p", () => ({ "vMaj": 188, "vMinSrv": 1 }))
+  .post("/p", async ({ body }) => {
+    const { areaId } = body as any;
+    
+    // Track player presence if we have an active profile and area
+    if (currentActiveProfile && areaId) {
+      try {
+        const accountData = await getAccountDataForCurrentProfile();
+        if (accountData.personId && accountData.personId !== "unknown") {
+          updatePlayerPresence(accountData.personId, currentActiveProfile, areaId);
+        }
+      } catch (e) {
+        // Silently ignore presence tracking errors
+      }
+    }
+    
+    return { "vMaj": 188, "vMinSrv": 1 };
+  })
   .post(
     "/area/load",
     async ({ body: { areaId, areaUrlName } }) => {
@@ -1890,6 +2014,14 @@ const app = new Elysia()
   .post("/area/lists", async () => {
     const dynamic = await getDynamicAreaList();
 
+    // Helper to add live player counts to area list
+    const withLivePlayerCounts = (areas: any[]) => {
+      return areas.map(area => ({
+        ...area,
+        playerCount: getAreaPlayerCount(area.id)
+      }));
+    };
+
     // Get current profile's owned areas for filtering "created" list and visited areas
     let ownedAreaIds: string[] = [];
     let homeAreaId: string | null = null;
@@ -1927,18 +2059,24 @@ const app = new Elysia()
       ? allCreated.filter((area: any) => ownedAreaIds.includes(area.id))
       : []; // Empty if no profile or no owned areas
 
+    // Get live lively areas (areas with active players, sorted by player count)
+    const livelyAreas = getLivelyAreas();
+    
+    // Get total online players
+    const totalOnline = getTotalOnlinePlayers();
+
     return {
-      visited: userVisitedAreas,
-      created: userCreated,
-      newest: [...canned_areaList.newest, ...dynamic.newest],
-      popular: [...canned_areaList.popular, ...dynamic.popular],
-      popular_rnd: [...canned_areaList.popular_rnd, ...dynamic.popular_rnd],
-      popularNew: [...canned_areaList.popularNew, ...dynamic.popularNew],
-      popularNew_rnd: [...canned_areaList.popularNew_rnd, ...dynamic.popularNew_rnd],
-      lively: [...canned_areaList.lively, ...dynamic.lively],
-      favorite: [...canned_areaList.favorite, ...dynamic.favorite],
-      mostFavorited: [...canned_areaList.mostFavorited, ...dynamic.mostFavorited],
-      totalOnline: canned_areaList.totalOnline + dynamic.totalOnline,
+      visited: withLivePlayerCounts(userVisitedAreas),
+      created: withLivePlayerCounts(userCreated),
+      newest: withLivePlayerCounts([...canned_areaList.newest, ...dynamic.newest]),
+      popular: withLivePlayerCounts([...canned_areaList.popular, ...dynamic.popular]),
+      popular_rnd: withLivePlayerCounts([...canned_areaList.popular_rnd, ...dynamic.popular_rnd]),
+      popularNew: withLivePlayerCounts([...canned_areaList.popularNew, ...dynamic.popularNew]),
+      popularNew_rnd: withLivePlayerCounts([...canned_areaList.popularNew_rnd, ...dynamic.popularNew_rnd]),
+      lively: livelyAreas,
+      favorite: withLivePlayerCounts([...canned_areaList.favorite, ...dynamic.favorite]),
+      mostFavorited: withLivePlayerCounts([...canned_areaList.mostFavorited, ...dynamic.mostFavorited]),
+      totalOnline: totalOnline,
       totalAreas: canned_areaList.totalAreas + dynamic.totalAreas,
       totalPublicAreas: canned_areaList.totalPublicAreas + dynamic.totalPublicAreas,
       totalSearchablePublicAreas: canned_areaList.totalSearchablePublicAreas + dynamic.totalSearchablePublicAreas
