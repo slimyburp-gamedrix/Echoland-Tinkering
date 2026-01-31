@@ -2002,6 +2002,7 @@ const app = new Elysia()
 	.post("/area/updatesettings", async ({ body }) => {
 		const { 
 			areaId, 
+			description,
 			environmentChanger, 
 			environmentType,
 			isZeroGravity,
@@ -2096,6 +2097,13 @@ const app = new Elysia()
 				console.log(`[AREA SETTINGS] Updated isExcluded to ${areaData.isExcluded} for ${areaId}`);
 			}
 			
+			// Update description
+			if (description !== undefined) {
+				areaData.description = description;
+				updated = true;
+				console.log(`[AREA SETTINGS] Updated description for ${areaId}`);
+			}
+			
 			// Write updated data back to load file
 			if (updated) {
 				await Bun.write(loadPath, JSON.stringify(areaData, null, 2));
@@ -2110,6 +2118,7 @@ const app = new Elysia()
 						if (hasFloatingDust !== undefined) infoData.hasFloatingDust = areaData.hasFloatingDust;
 						if (isCopyable !== undefined) infoData.isCopyable = areaData.isCopyable;
 						if (isExcluded !== undefined) infoData.isExcluded = areaData.isExcluded;
+						if (description !== undefined) infoData.description = description;
 						
 						await Bun.write(infoPath, JSON.stringify(infoData, null, 2));
 					}
@@ -2131,6 +2140,7 @@ const app = new Elysia()
 	}, {
 		body: t.Object({
 			areaId: t.String(),
+			description: t.Optional(t.String()),
 			environmentChanger: t.Optional(t.String()),
 			environmentType: t.Optional(t.String()),
 			isZeroGravity: t.Optional(t.Union([t.String(), t.Boolean()])),
@@ -2141,7 +2151,91 @@ const app = new Elysia()
 			isExcluded: t.Optional(t.Union([t.String(), t.Boolean()]))
 		}),
 		type: "form"
-	})	
+	})
+	.post("/area/rename", async ({ body }) => {
+		const { areaId, newName } = body as any;
+		
+		if (!areaId || typeof areaId !== "string") {
+			return new Response(JSON.stringify({ ok: false, error: "Missing areaId" }), { 
+				status: 400, 
+				headers: { "Content-Type": "application/json" } 
+			});
+		}
+		
+		if (!newName || typeof newName !== "string" || newName.trim().length === 0) {
+			return new Response(JSON.stringify({ ok: false, error: "Invalid name" }), { 
+				status: 400, 
+				headers: { "Content-Type": "application/json" } 
+			});
+		}
+		
+		const loadPath = `./data/area/load/${areaId}.json`;
+		const infoPath = `./data/area/info/${areaId}.json`;
+		
+		try {
+			const loadFile = Bun.file(loadPath);
+			if (!await loadFile.exists()) {
+				return new Response(JSON.stringify({ ok: false, error: "Area not found" }), { 
+					status: 404, 
+					headers: { "Content-Type": "application/json" } 
+				});
+			}
+			
+			const trimmedName = newName.trim();
+			
+			// Update load file
+			const areaData = await loadFile.json();
+			const oldName = areaData.areaName;
+			areaData.areaName = trimmedName;
+			await Bun.write(loadPath, JSON.stringify(areaData, null, 2));
+			
+			// Update info file
+			try {
+				const infoFile = Bun.file(infoPath);
+				if (await infoFile.exists()) {
+					const infoData = await infoFile.json();
+					infoData.name = trimmedName;
+					infoData.renameCount = (infoData.renameCount || 0) + 1;
+					await Bun.write(infoPath, JSON.stringify(infoData, null, 2));
+				}
+			} catch (infoError) {
+				console.warn(`[AREA RENAME] Could not update info file for ${areaId}:`, infoError);
+			}
+			
+			// Update in-memory area index
+			const areaUrlName = trimmedName.replace(/[^-_a-z0-9]/gi, "").toLowerCase();
+			const indexEntry = areaIndex.find(a => a.id === areaId);
+			if (indexEntry) {
+				// Remove old URL name mapping
+				const oldUrlName = oldName?.replace(/[^-_a-z0-9]/gi, "").toLowerCase();
+				if (oldUrlName) {
+					areaByUrlName.delete(oldUrlName);
+				}
+				// Update index entry
+				indexEntry.name = trimmedName;
+				areaByUrlName.set(areaUrlName, areaId);
+			}
+			
+			console.log(`[AREA RENAME] Renamed area ${areaId} from "${oldName}" to "${trimmedName}"`);
+			
+			return new Response(JSON.stringify({ ok: true }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" }
+			});
+		} catch (error) {
+			console.error("[AREA RENAME] Error:", error);
+			return new Response(JSON.stringify({ ok: false, error: "Server error" }), { 
+				status: 500, 
+				headers: { "Content-Type": "application/json" } 
+			});
+		}
+	}, {
+		body: t.Object({
+			areaId: t.String(),
+			newName: t.String()
+		}),
+		type: "form"
+	})
   .post("/area/visit", async ({ body }) => {
     const { areaId, name } = body;
     if (!areaId || !name) return new Response("Missing data", { status: 400 });
