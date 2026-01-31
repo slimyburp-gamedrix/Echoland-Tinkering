@@ -2452,6 +2452,101 @@ const app = new Elysia()
 		}),
 		type: "form"
 	})
+	.post("/area/seteditor", async ({ body }) => {
+		const { areaId, personId, isEditor } = body as any;
+		
+		if (!areaId || !personId) {
+			return new Response(JSON.stringify({ ok: false, error: "Missing areaId or personId" }), { 
+				status: 400, 
+				headers: { "Content-Type": "application/json" } 
+			});
+		}
+		
+		const infoPath = `./data/area/info/${areaId}.json`;
+		
+		try {
+			const infoFile = Bun.file(infoPath);
+			if (!await infoFile.exists()) {
+				console.log(`[AREA SETEDITOR] Area info not found: ${areaId}`);
+				return new Response(JSON.stringify({ ok: false, error: "Area not found" }), { 
+					status: 404, 
+					headers: { "Content-Type": "application/json" } 
+				});
+			}
+			
+			const infoData = await infoFile.json();
+			
+			// Initialize editors array if it doesn't exist
+			if (!infoData.editors) infoData.editors = [];
+			
+			// Get person name for the editor entry
+			let personName = "Unknown";
+			try {
+				const personInfoPath = `./data/person/info/${personId}.json`;
+				const personInfoFile = Bun.file(personInfoPath);
+				if (await personInfoFile.exists()) {
+					const personInfo = await personInfoFile.json();
+					personName = personInfo.screenName || personInfo.name || "Unknown";
+				}
+			} catch {
+				console.warn(`[AREA SETEDITOR] Could not get person name for ${personId}`);
+			}
+			
+			// Check if should add or remove editor
+			const shouldBeEditor = isEditor === "True" || isEditor === true || isEditor === "true" || isEditor === undefined;
+			const existingEditorIndex = infoData.editors.findIndex((e: any) => e.id === personId);
+			
+			if (shouldBeEditor) {
+				if (existingEditorIndex === -1) {
+					// Add as editor
+					infoData.editors.push({ id: personId, name: personName, isOwner: false });
+					console.log(`[AREA SETEDITOR] Added ${personName} (${personId}) as editor to area ${areaId}`);
+				} else {
+					console.log(`[AREA SETEDITOR] ${personName} (${personId}) is already an editor of area ${areaId}`);
+				}
+			} else {
+				if (existingEditorIndex !== -1) {
+					// Check if trying to remove owner
+					if (infoData.editors[existingEditorIndex].isOwner) {
+						console.log(`[AREA SETEDITOR] Cannot remove owner ${personId} from editors`);
+						return new Response(JSON.stringify({ ok: false, error: "Cannot remove owner" }), { 
+							status: 400, 
+							headers: { "Content-Type": "application/json" } 
+						});
+					}
+					// Remove as editor
+					infoData.editors.splice(existingEditorIndex, 1);
+					console.log(`[AREA SETEDITOR] Removed ${personName} (${personId}) as editor from area ${areaId}`);
+				}
+			}
+			
+			// Save updated info
+			await Bun.write(infoPath, JSON.stringify(infoData, null, 2));
+			
+			return new Response(JSON.stringify({ ok: true }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" }
+			});
+		} catch (error) {
+			console.error("[AREA SETEDITOR] Error:", error);
+			return new Response(JSON.stringify({ ok: false, error: "Server error" }), { 
+				status: 500, 
+				headers: { "Content-Type": "application/json" } 
+			});
+		}
+	}, {
+		body: t.Object({
+			areaId: t.String(),
+			personId: t.String(),
+			isEditor: t.Optional(t.String())
+		}),
+		type: "form"
+	})
+	.post("/person/registerusagemode", async ({ body }) => {
+		// Stub endpoint for usage mode registration
+		console.log("[REGISTERUSAGEMODE] Received:", body);
+		return { ok: true };
+	})
   .post("/area/visit", async ({ body }) => {
     const { areaId, name } = body;
     if (!areaId || !name) return new Response("Missing data", { status: 400 });
