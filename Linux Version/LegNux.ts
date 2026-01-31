@@ -525,7 +525,7 @@ if (await cacheFile.exists()) {
             description: areaData.description || "",
             playerCount: 0
           };
-          const areaUrlName = area.name.replace(/[^-_a-z0-9]/g, "");
+          const areaUrlName = area.name.replace(/[^-_a-z0-9]/gi, "").toLowerCase();
           areaByUrlName.set(areaUrlName, area.id);
           areaIndex.push(area);
         }
@@ -2351,7 +2351,7 @@ const app = new Elysia()
 		type: "form"
 	})
 	.post("/area/rename", async ({ body }) => {
-		const { areaId, newName } = body as any;
+		const { areaId, name } = body as any;
 		
 		if (!areaId || typeof areaId !== "string") {
 			return new Response(JSON.stringify({ ok: false, error: "Missing areaId" }), { 
@@ -2360,12 +2360,14 @@ const app = new Elysia()
 			});
 		}
 		
-		if (!newName || typeof newName !== "string" || newName.trim().length === 0) {
+		if (!name || typeof name !== "string" || name.trim().length === 0) {
 			return new Response(JSON.stringify({ ok: false, error: "Invalid name" }), { 
 				status: 400, 
 				headers: { "Content-Type": "application/json" } 
 			});
 		}
+		
+		const newName = name;
 		
 		const loadPath = `./data/area/load/${areaId}.json`;
 		const infoPath = `./data/area/info/${areaId}.json`;
@@ -2441,7 +2443,7 @@ const app = new Elysia()
 	}, {
 		body: t.Object({
 			areaId: t.String(),
-			newName: t.String()
+			name: t.String()
 		}),
 		type: "form"
 	})
