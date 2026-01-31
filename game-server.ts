@@ -2897,14 +2897,64 @@ const app = new Elysia()
   })
   .post("person/info",
     async ({ body: { areaId, userId } }) => {
-      const file = Bun.file(path.resolve("./data/person/info/", userId + ".json"))
-
+      // Load base person info
+      const file = Bun.file(path.resolve("./data/person/info/", userId + ".json"));
+      let personData: Record<string, any> = {};
+      
       if (await file.exists()) {
-        return await file.json()
+        personData = await file.json();
+      } else {
+        personData = { 
+          isFriend: false, 
+          isEditorHere: false, 
+          isListEditorHere: false, 
+          isOwnerHere: false, 
+          isAreaLocked: false, 
+          isOnline: false 
+        };
       }
-      else {
-        return { "isFriend": false, "isEditorHere": false, "isListEditorHere": false, "isOwnerHere": false, "isAreaLocked": false, "isOnline": false }
+      
+      // Add area-specific editor info
+      try {
+        const areaInfoPath = `./data/area/info/${areaId}.json`;
+        const areaInfoFile = Bun.file(areaInfoPath);
+        
+        if (await areaInfoFile.exists()) {
+          const areaInfo = await areaInfoFile.json();
+          
+          // Check if target user is an editor of this area
+          if (areaInfo.editors && Array.isArray(areaInfo.editors)) {
+            const editorEntry = areaInfo.editors.find((e: any) => e.id === userId);
+            if (editorEntry) {
+              personData.isEditorHere = true;
+              personData.isOwnerHere = editorEntry.isOwner === true;
+            } else {
+              personData.isEditorHere = false;
+              personData.isOwnerHere = false;
+            }
+          }
+          
+          // Check if target user is a list editor
+          if (areaInfo.listEditors && Array.isArray(areaInfo.listEditors)) {
+            personData.isListEditorHere = areaInfo.listEditors.some((e: any) => e.id === userId);
+          }
+          
+          // Check if current requestor is the owner (can grant editor rights)
+          const account = await getAccountDataForCurrentProfile();
+          if (account.personId && areaInfo.editors && Array.isArray(areaInfo.editors)) {
+            const requestorEntry = areaInfo.editors.find((e: any) => e.id === account.personId);
+            personData.requestorIsOwner = requestorEntry?.isOwner === true;
+          } else {
+            personData.requestorIsOwner = false;
+          }
+        }
+      } catch (err) {
+        console.warn(`[PERSON INFO] Error checking editor status:`, err);
       }
+      
+      console.log(`[PERSON INFO] User ${userId} in area ${areaId}: isEditor=${personData.isEditorHere}, isOwner=${personData.isOwnerHere}, requestorIsOwner=${personData.requestorIsOwner}`);
+      
+      return personData;
     },
     { body: t.Object({ areaId: t.String(), userId: t.String() }) }
   )
