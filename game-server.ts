@@ -1111,7 +1111,6 @@ const app = new Elysia()
         ageSecs: account.ageSecs || 192371963,
         attachments: attachmentsString,
         isSoftBanned: false,
-        isEditor: true
         showFlagWarning: false,
         flagTags: [],
         areaCount: account.ownedAreas?.length || 1,
