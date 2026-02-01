@@ -322,8 +322,8 @@ async function injectInitialAreaToList(areaId: string, areaName: string) {
 
   const newEntry = { id: areaId, name: areaName, playerCount: 0 };
 
-  areaList.visited = [...(areaList.visited ?? []), newEntry];
-  areaList.created = [...(areaList.created ?? []), newEntry];
+  // NOTE: Do NOT add to global visited/created lists - those are per-profile only
+  // Only add to newest for area discovery purposes
   areaList.newest = [newEntry, ...(areaList.newest ?? [])].slice(0, 50);
   areaList.totalAreas = (areaList.totalAreas ?? 0) + 1;
   areaList.totalPublicAreas = (areaList.totalPublicAreas ?? 0) + 1;
@@ -377,6 +377,8 @@ async function ensurePersonInfo(account: Record<string, any>) {
   try {
     await fs.access(infoPath);
   } catch {
+    // NOTE: isEditorHere/isListEditorHere/isOwnerHere are NOT stored here
+    // They are calculated dynamically per-area in /person/info and /person/infobasic endpoints
     const personInfo = {
       id: account.personId,
       screenName: account.screenName,
@@ -386,9 +388,6 @@ async function ensurePersonInfo(account: Record<string, any>) {
       isBanned: false,
       lastActivityOn: new Date().toISOString(),
       isFriend: false,
-      isEditorHere: true,
-      isListEditorHere: true,
-      isOwnerHere: true,
       isAreaLocked: false,
       isOnline: true
     };
@@ -1537,16 +1536,7 @@ const app = new Elysia()
                 }
               }
 
-              // Also maintain global visited list for compatibility
-              const listPath = "./data/area/arealist.json";
-              const areaList = await getDynamicAreaList();
-              const alreadyVisitedGlobal = areaList.visited?.some((a: any) => a.id === areaId);
-
-              if (!alreadyVisitedGlobal) {
-                areaList.visited = [...(areaList.visited ?? []), { id: areaId, name: areaName, playerCount: 0 }];
-                await writeFileWithPermissions(listPath, JSON.stringify(areaList, null, 2));
-                console.log(`[VISITED] Added area ${areaId} (${areaName}) to global visited list.`);
-              }
+              // NOTE: Do NOT add to global visited list - visited areas are per-profile only
             } catch (error) {
               console.error("[VISITED] Error tracking visit for area", areaId, ":", error);
             }
@@ -1668,16 +1658,7 @@ const app = new Elysia()
                 }
               }
 
-              // Also maintain global visited list for compatibility
-              const listPath = "./data/area/arealist.json";
-              const areaList = await getDynamicAreaList();
-              const alreadyVisitedGlobal = areaList.visited?.some((a: any) => a.id === foundAreaId);
-
-              if (!alreadyVisitedGlobal) {
-                areaList.visited = [...(areaList.visited ?? []), { id: foundAreaId, name: areaName, playerCount: 0 }];
-                await writeFileWithPermissions(listPath, JSON.stringify(areaList, null, 2));
-                console.log(`[VISITED] Added area ${foundAreaId} (${areaName}) to global visited list.`);
-              }
+              // NOTE: Do NOT add to global visited list - visited areas are per-profile only
             } catch (error) {
               console.error("[VISITED] Error tracking visit for area", foundAreaId, ":", error);
             }
@@ -2043,21 +2024,32 @@ const app = new Elysia()
         console.log(`[AREA LIST] Loaded ${userVisitedAreas.length} visited areas for profile ${currentActiveProfile}`);
       } catch (e) {
         console.warn("[AREA LIST] Could not load profile for area filtering:", e);
-        // Fall back to global visited areas if profile can't be loaded
-        userVisitedAreas = [...canned_areaList.visited, ...dynamic.visited];
+        // No profile data = empty visited list (per-profile only)
+        userVisitedAreas = [];
       }
     } else {
-      // No active profile, fall back to global visited areas
-      userVisitedAreas = [...canned_areaList.visited, ...dynamic.visited];
+      // No active profile = empty visited list (per-profile only)
+      userVisitedAreas = [];
     }
 
-    // Combine all areas for "created" filtering
-    const allCreated = [...canned_areaList.created, ...dynamic.created];
-
-    // Filter "created" to only show areas owned by current profile
-    const userCreated = ownedAreaIds.length > 0
-      ? allCreated.filter((area: any) => ownedAreaIds.includes(area.id))
-      : []; // Empty if no profile or no owned areas
+    // Build "created" list directly from profile's ownedAreaIds (not from global list)
+    const userCreated: any[] = [];
+    for (const areaId of ownedAreaIds) {
+      // Try to get area info from in-memory index first
+      const indexEntry = areaIndex.find((a: any) => a.id === areaId);
+      if (indexEntry) {
+        userCreated.push({ id: areaId, name: indexEntry.name, playerCount: 0 });
+      } else {
+        // Fall back to loading from file if not in index
+        try {
+          const areaLoadPath = `./data/area/load/${areaId}.json`;
+          const areaData = JSON.parse(await fs.readFile(areaLoadPath, "utf-8"));
+          userCreated.push({ id: areaId, name: areaData.areaName || areaId, playerCount: 0 });
+        } catch {
+          // Area doesn't exist, skip it
+        }
+      }
+    }
 
     // Get live lively areas (areas with active players, sorted by player count)
     const livelyAreas = getLivelyAreas();
@@ -2278,16 +2270,8 @@ const app = new Elysia()
 
     const newEntry = { id: areaId, name: areaName, playerCount: 0 };
 
-    const alreadyCreated = areaList.created?.some((a: any) => a.id === areaId);
-    const alreadyVisited = areaList.visited?.some((a: any) => a.id === areaId);
-
-    if (!alreadyCreated) {
-      areaList.created = [...(areaList.created ?? []), newEntry];
-    }
-    if (!alreadyVisited) {
-      areaList.visited = [...(areaList.visited ?? []), newEntry];
-    }
-
+    // NOTE: Do NOT add to global created/visited lists - those are per-profile only
+    // Only add to newest for area discovery purposes
     areaList.newest = [newEntry, ...(areaList.newest ?? [])].slice(0, 50);
     areaList.totalAreas = (areaList.totalAreas ?? 0) + 1;
     areaList.totalPublicAreas = (areaList.totalPublicAreas ?? 0) + 1;
@@ -2796,26 +2780,10 @@ const app = new Elysia()
         console.log(`[VISITED] Area ${areaId} already in ${accountData.screenName}'s visited list`);
       }
 
-      // Also maintain global visited list for compatibility
-      const listPath = "./data/area/arealist.json";
-      const areaList = await getDynamicAreaList();
-      const alreadyVisitedGlobal = areaList.visited?.some((a: any) => a.id === areaId);
-
-      if (!alreadyVisitedGlobal) {
-        areaList.visited = [...(areaList.visited ?? []), { id: areaId, name, playerCount: 0 }];
-        await writeFileWithPermissions(listPath, JSON.stringify(areaList, null, 2));
-      }
+      // NOTE: Do NOT add to global visited list - visited areas are per-profile only
     } catch (error) {
       console.error("Error tracking area visit:", error);
-      // Continue with just global tracking if user tracking fails
-      const listPath = "./data/area/arealist.json";
-      const areaList = await getDynamicAreaList();
-      const alreadyVisited = areaList.visited.some(a => a.id === areaId);
-
-      if (!alreadyVisited) {
-        areaList.visited.push({ id: areaId, name, playerCount: 0 });
-        await writeFileWithPermissions(listPath, JSON.stringify(areaList, null, 2));
-      }
+      // Profile-specific visit tracking only, no global fallback
     }
 
     return { ok: true };
