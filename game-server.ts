@@ -537,9 +537,9 @@ async function ensureHomeArea(account: Record<string, any>) {
     onlyOwnerSetsLocks: false,
     isExcluded: false,
     environmentChangersJSON: JSON.stringify({ environmentChangers: [] }),
-    requestorIsEditor: true,
-    requestorIsListEditor: true,
-    requestorIsOwner: true,
+    requestorIsEditor: false,
+    requestorIsListEditor: false,
+    requestorIsOwner: false,
     placements: [
       {
         Id: crypto.randomUUID().replace(/-/g, "").slice(0, 24),
