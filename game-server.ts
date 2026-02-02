@@ -1441,33 +1441,28 @@ const app = new Elysia()
             const areaData = await file.json();
             console.log(`[AREA LOAD] ✅ Successfully loaded area ${areaId} (${areaData.areaName || 'unnamed'})`);
 
-            // Determine which profile is loading this area using multi-client tracking
-            const effectiveProfile = getEffectiveProfile(areaId);
-            console.log(`[AREA LOAD] Effective profile: ${effectiveProfile}`);
+            // Get the REQUESTER (the active client making this request)
+            const requesterProfile = currentActiveProfile || getMostRecentlyActiveProfile();
+            console.log(`[AREA LOAD] Requester profile: ${requesterProfile}`);
 
-            // Track this area visit for the current user
+            // Track this area visit for the REQUESTER
             try {
               const areaName = areaData.areaName || areaData.name || "Unknown Area";
               console.log(`[VISITED] Tracking visit to area ${areaId} (${areaName})`);
               
-              // Update the client's current area if we identified them
-              const homeSession = getClientByHomeArea(areaId);
-              if (homeSession) {
-                // This is someone loading their home - update their session
-                updateClientArea(homeSession.homeAreaId, areaId);
-              } else {
-                // Someone visiting another area - try to find them by their home
+              // Update the requester's session current area
+              if (requesterProfile) {
                 for (const session of clientsByHome.values()) {
-                  if (session.profileName === effectiveProfile) {
+                  if (session.profileName === requesterProfile) {
                     updateClientArea(session.homeAreaId, areaId);
                     break;
                   }
                 }
               }
 
-              // Track per-user visited areas using the profile-specific account file
-              if (effectiveProfile) {
-                const profileAccountPath = `./data/person/accounts/${effectiveProfile}.json`;
+              // Track per-user visited areas for the REQUESTER
+              if (requesterProfile) {
+                const profileAccountPath = `./data/person/accounts/${requesterProfile}.json`;
                 const accountData = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
 
                 // Initialize visitedAreas if it doesn't exist
@@ -1494,9 +1489,9 @@ const app = new Elysia()
                   }
 
                   await fs.writeFile(profileAccountPath, JSON.stringify(accountData, null, 2));
-                  console.log(`[VISITED] ✅ Added area ${areaId} (${areaName}) to ${effectiveProfile}'s visited list. Total: ${accountData.visitedAreas.length}`);
+                  console.log(`[VISITED] ✅ Added area ${areaId} (${areaName}) to ${requesterProfile}'s visited list. Total: ${accountData.visitedAreas.length}`);
                 } else {
-                  console.log(`[VISITED] Area ${areaId} already in ${effectiveProfile}'s visited list`);
+                  console.log(`[VISITED] Area ${areaId} already in ${requesterProfile}'s visited list`);
                 }
               }
 
@@ -1512,19 +1507,23 @@ const app = new Elysia()
             console.log(`[AREA LOAD] Bundle ${areaData.areaKey} exists: ${bundleExists}`);
 
             // Check if current user has edit permissions
+            // IMPORTANT: We need the REQUESTER's ID, not the area owner's ID!
+            // The requester is the currently active profile (most recently authenticated)
             let hasEditPermission = false;
             let isOwner = false;
 
             try {
-              // Load account for the effective profile (the one loading this area)
+              // Get the REQUESTER - the active client, not the area owner
+              const requesterProfile = currentActiveProfile || getMostRecentlyActiveProfile();
               let currentUserId = "unknown";
-              if (effectiveProfile) {
-                const profileAccountPath = `./data/person/accounts/${effectiveProfile}.json`;
+              
+              if (requesterProfile) {
+                const requesterAccountPath = `./data/person/accounts/${requesterProfile}.json`;
                 try {
-                  const accountData = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
-                  currentUserId = accountData.personId;
+                  const requesterData = JSON.parse(await fs.readFile(requesterAccountPath, "utf-8"));
+                  currentUserId = requesterData.personId;
                 } catch (e) {
-                  console.warn(`[AREA LOAD] Could not load profile ${effectiveProfile}`);
+                  console.warn(`[AREA LOAD] Could not load requester profile ${requesterProfile}`);
                 }
               }
 
@@ -1542,7 +1541,7 @@ const app = new Elysia()
                 isOwner = areaData.creatorId === currentUserId;
               }
 
-              console.log(`[AREA LOAD] User ${currentUserId} (${effectiveProfile}) has edit permission: ${hasEditPermission}, is owner: ${isOwner}`);
+              console.log(`[AREA LOAD] User ${currentUserId} (${requesterProfile}) has edit permission: ${hasEditPermission}, is owner: ${isOwner}`);
             } catch (err) {
               console.warn(`[AREA LOAD] Could not check edit permissions for area ${areaId}:`, err);
             }
@@ -1582,26 +1581,27 @@ const app = new Elysia()
             // Load area data and trigger visit tracking
             const areaData = await file.json();
 
-            // Track this area visit for the current user
-            // Determine which profile is loading this area using multi-client tracking
-            const effectiveProfile = getEffectiveProfile(foundAreaId);
-            console.log(`[VISITED] Effective profile for URL load: ${effectiveProfile}`);
+            // Track this area visit for the REQUESTER (active client), not the area owner!
+            const requesterProfile = currentActiveProfile || getMostRecentlyActiveProfile();
+            console.log(`[VISITED] Requester for URL load: ${requesterProfile}`);
             
             try {
               const areaName = areaData.areaName || areaData.name || "Unknown Area";
               console.log(`[VISITED] Tracking visit to area ${foundAreaId} (${areaName}) via URL name`);
 
-              // Update the client's current area
-              for (const session of clientsByHome.values()) {
-                if (session.profileName === effectiveProfile) {
-                  updateClientArea(session.homeAreaId, foundAreaId);
-                  break;
+              // Update the requester's session current area
+              if (requesterProfile) {
+                for (const session of clientsByHome.values()) {
+                  if (session.profileName === requesterProfile) {
+                    updateClientArea(session.homeAreaId, foundAreaId);
+                    break;
+                  }
                 }
               }
 
-              // Track per-user visited areas using the profile-specific account file
-              if (effectiveProfile) {
-                const profileAccountPath = `./data/person/accounts/${effectiveProfile}.json`;
+              // Track per-user visited areas for the REQUESTER
+              if (requesterProfile) {
+                const profileAccountPath = `./data/person/accounts/${requesterProfile}.json`;
                 const accountData = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
 
                 // Initialize visitedAreas if it doesn't exist
@@ -1628,9 +1628,9 @@ const app = new Elysia()
                   }
 
                   await fs.writeFile(profileAccountPath, JSON.stringify(accountData, null, 2));
-                  console.log(`[VISITED] ✅ Added area ${foundAreaId} (${areaName}) to ${effectiveProfile}'s visited list. Total: ${accountData.visitedAreas.length}`);
+                  console.log(`[VISITED] ✅ Added area ${foundAreaId} (${areaName}) to ${requesterProfile}'s visited list. Total: ${accountData.visitedAreas.length}`);
                 } else {
-                  console.log(`[VISITED] Area ${foundAreaId} already in ${effectiveProfile}'s visited list`);
+                  console.log(`[VISITED] Area ${foundAreaId} already in ${requesterProfile}'s visited list`);
                 }
               }
 
@@ -1640,19 +1640,22 @@ const app = new Elysia()
             }
 
             // Check if current user has edit permissions
+            // IMPORTANT: We need the REQUESTER's ID, not the area owner's ID!
             let hasEditPermission = false;
             let isOwner = false;
 
             try {
-              // Load account for the effective profile
+              // Get the REQUESTER - the active client, not the area owner
+              const requesterProfile = currentActiveProfile || getMostRecentlyActiveProfile();
               let currentUserId = "unknown";
-              if (effectiveProfile) {
-                const profileAccountPath = `./data/person/accounts/${effectiveProfile}.json`;
+              
+              if (requesterProfile) {
+                const requesterAccountPath = `./data/person/accounts/${requesterProfile}.json`;
                 try {
-                  const accountData = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
-                  currentUserId = accountData.personId;
+                  const requesterData = JSON.parse(await fs.readFile(requesterAccountPath, "utf-8"));
+                  currentUserId = requesterData.personId;
                 } catch (e) {
-                  console.warn(`[AREA LOAD] Could not load profile ${effectiveProfile}`);
+                  console.warn(`[AREA LOAD] Could not load requester profile ${requesterProfile}`);
                 }
               }
 
@@ -1670,7 +1673,7 @@ const app = new Elysia()
                 isOwner = areaData.creatorId === currentUserId;
               }
 
-              console.log(`[AREA LOAD] User ${currentUserId} (${effectiveProfile}) has edit permission: ${hasEditPermission}, is owner: ${isOwner}`);
+              console.log(`[AREA LOAD] User ${currentUserId} (${requesterProfile}) has edit permission: ${hasEditPermission}, is owner: ${isOwner}`);
             } catch (err) {
               console.warn(`[AREA LOAD] Could not check edit permissions for area ${foundAreaId}:`, err);
             }
@@ -1985,8 +1988,8 @@ const app = new Elysia()
     };
 
     // Determine which profile is making this request
-    // Use most recently active profile since we don't have area context
-    const effectiveProfile = getMostRecentlyActiveProfile();
+    // Use currently active profile (most recently authenticated), fallback to most recently active
+    const effectiveProfile = currentActiveProfile || getMostRecentlyActiveProfile();
 
     // Get current profile's owned areas for filtering "created" list and visited areas
     let ownedAreaIds: string[] = [];
