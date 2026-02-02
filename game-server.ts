@@ -102,20 +102,22 @@ function getProfileForArea(areaId: string): string | null {
     }
   }
   
-  // Fallback to currentActiveProfile
-  return currentActiveProfile;
+  // Third check: who was most recently active? (they're probably the one making this request)
+  return getMostRecentlyActiveProfile();
 }
 
-// Get profile, preferring area-based detection, then falling back
+// Get profile, preferring area-based detection, then most recent activity
 function getEffectiveProfile(areaId?: string | null): string | null {
   if (areaId) {
     const areaProfile = getProfileForArea(areaId);
     if (areaProfile) return areaProfile;
   }
-  return currentActiveProfile;
+  // No area context - use most recently active
+  return getMostRecentlyActiveProfile();
 }
 
 // Get the most recently active profile (for requests without area context)
+// NO FALLBACK to currentActiveProfile - proper multi-client behavior
 function getMostRecentlyActiveProfile(): string | null {
   let mostRecent: ClientSession | null = null;
   for (const session of clientsByHome.values()) {
@@ -123,7 +125,13 @@ function getMostRecentlyActiveProfile(): string | null {
       mostRecent = session;
     }
   }
-  return mostRecent?.profileName || currentActiveProfile;
+  return mostRecent?.profileName || null;
+}
+
+// Get profile by their personId
+function getProfileByPersonId(personId: string): string | null {
+  const session = clientsByPersonId.get(personId);
+  return session?.profileName || null;
 }
 // ============ END MULTI-CLIENT SESSION TRACKING ============
 
@@ -131,32 +139,35 @@ function getAccountPathForProfile(profileName: string): string {
   return `${ACCOUNTS_DIR}/${profileName}.json`;
 }
 
-// Returns the account path for the current active profile
+// Get account path for the most recently active profile (uses session tracking)
 async function getAccountPath(): Promise<string> {
-  if (!currentActiveProfile) {
-    throw new Error("No active profile set");
+  const effectiveProfile = getMostRecentlyActiveProfile();
+  if (!effectiveProfile) {
+    throw new Error("No active session");
   }
-  return getAccountPathForProfile(currentActiveProfile);
+  return getAccountPathForProfile(effectiveProfile);
 }
 
-async function getAccountDataForCurrentProfile(): Promise<Record<string, any>> {
-  if (!currentActiveProfile) {
-    return {
-      personId: "unknown",
-      screenName: "anonymous",
-      homeAreaId: "", // Or a default public area ID if applicable
-      attachments: {},
-      inventory: { pages: {} },
-      ownedAreas: []
-    };
-  }
-
-  const profilePath = getAccountPathForProfile(currentActiveProfile);
+// Load account data for a specific profile
+async function loadAccountData(profileName: string): Promise<Record<string, any> | null> {
+  const profilePath = getAccountPathForProfile(profileName);
   try {
     const data = await fs.readFile(profilePath, "utf-8");
     return JSON.parse(data);
   } catch (e) {
-    console.warn(`⚠️ Could not load profile ${currentActiveProfile}:`, e);
+    console.warn(`⚠️ Could not load profile ${profileName}:`, e);
+    return null;
+  }
+}
+
+// DEPRECATED: Use getMostRecentlyActiveProfile() + loadAccountData() instead
+// This function is kept for backwards compatibility but uses session tracking
+async function getAccountDataForCurrentProfile(): Promise<Record<string, any>> {
+  // Use session tracking to find the most recently active profile
+  const effectiveProfile = getMostRecentlyActiveProfile();
+  
+  if (!effectiveProfile) {
+    console.warn(`[ACCOUNT] No active session - returning anonymous data`);
     return {
       personId: "unknown",
       screenName: "anonymous",
@@ -166,6 +177,20 @@ async function getAccountDataForCurrentProfile(): Promise<Record<string, any>> {
       ownedAreas: []
     };
   }
+
+  const account = await loadAccountData(effectiveProfile);
+  if (account) {
+    return account;
+  }
+  
+  return {
+    personId: "unknown",
+    screenName: "anonymous",
+    homeAreaId: "",
+    attachments: {},
+    inventory: { pages: {} },
+    ownedAreas: []
+  };
 }
 
 
@@ -372,15 +397,6 @@ async function listProfiles(): Promise<string[]> {
     return files.filter((name) => name.endsWith(".json")).map((name) => name.replace(".json", ""));
   } catch {
     return [];
-  }
-}
-
-async function loadAccountData(profileName: string): Promise<Record<string, any> | null> {
-  try {
-    const data = await fs.readFile(getAccountPathForProfile(profileName), "utf-8");
-    return JSON.parse(data);
-  } catch {
-    return null;
   }
 }
 
@@ -2784,14 +2800,15 @@ const app = new Elysia()
     if (!areaId || !name) return new Response("Missing data", { status: 400 });
 
     try {
-      // Track per-user visited areas using the profile-specific account file
-      if (!currentActiveProfile) {
-        console.log(`[VISITED] No active profile, falling back to global tracking`);
-        throw new Error("No active profile");
+      // Track per-user visited areas using multi-client session tracking
+      const effectiveProfile = getEffectiveProfile(areaId);
+      if (!effectiveProfile) {
+        console.log(`[VISITED] No active session found for area ${areaId}`);
+        return new Response("No active session", { status: 400 });
       }
 
-      const profileAccountPath = `./data/person/accounts/${currentActiveProfile}.json`;
-      console.log(`[VISITED] Processing visit request for area ${areaId} (${name}) using profile: ${currentActiveProfile}`);
+      const profileAccountPath = `./data/person/accounts/${effectiveProfile}.json`;
+      console.log(`[VISITED] Processing visit request for area ${areaId} (${name}) using profile: ${effectiveProfile}`);
 
       const accountData = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
       console.log(`[VISITED] Current user: ${accountData.screenName} (${accountData.personId})`);
@@ -2824,7 +2841,7 @@ const app = new Elysia()
         }
 
         await fs.writeFile(profileAccountPath, JSON.stringify(accountData, null, 2));
-        console.log(`[VISITED] ✅ Successfully updated ${accountData.screenName}'s visited list in profile ${currentActiveProfile}. Total areas visited: ${accountData.visitedAreas.length}`);
+        console.log(`[VISITED] ✅ Successfully updated ${accountData.screenName}'s visited list in profile ${effectiveProfile}. Total areas visited: ${accountData.visitedAreas.length}`);
       } else {
         console.log(`[VISITED] Area ${areaId} already in ${accountData.screenName}'s visited list`);
       }
@@ -2856,13 +2873,21 @@ const app = new Elysia()
     const placementId = parsed.Id;
     const placementPath = `./data/placement/info/${areaId}/${placementId}.json`;
 
-    // Inject identity from active profile
+    // Inject identity using multi-client session tracking (use area context)
+    const effectiveProfile = getEffectiveProfile(areaId);
     try {
-      const account = await getAccountDataForCurrentProfile();
-      parsed.placerId = account.personId || "unknown";
-      parsed.placerName = account.screenName || "anonymous";
+      if (effectiveProfile) {
+        const account = await loadAccountData(effectiveProfile);
+        if (account) {
+          parsed.placerId = account.personId || "unknown";
+          parsed.placerName = account.screenName || "anonymous";
+        }
+      } else {
+        parsed.placerId = "unknown";
+        parsed.placerName = "anonymous";
+      }
     } catch (e) {
-      console.warn("⚠️ Could not load active profile for placement placer identity:", e);
+      console.warn("⚠️ Could not load profile for placement placer identity:", e);
       parsed.placerId = "unknown";
       parsed.placerName = "anonymous";
     }
@@ -3001,12 +3026,21 @@ const app = new Elysia()
     const placementId = parsed.Id;
     const placementPath = `./data/placement/info/${areaId}/${placementId}.json`;
 
+    // Use multi-client session tracking with area context
+    const effectiveProfile = getEffectiveProfile(areaId);
     try {
-      const account = await getAccountDataForCurrentProfile();
-      parsed.placerId = account.personId || "unknown";
-      parsed.placerName = account.screenName || "anonymous";
+      if (effectiveProfile) {
+        const account = await loadAccountData(effectiveProfile);
+        if (account) {
+          parsed.placerId = account.personId || "unknown";
+          parsed.placerName = account.screenName || "anonymous";
+        }
+      } else {
+        parsed.placerId = "unknown";
+        parsed.placerName = "anonymous";
+      }
     } catch (e) {
-      console.warn("⚠️ Could not load active profile for placement placer identity:", e);
+      console.warn("⚠️ Could not load profile for placement placer identity:", e);
       parsed.placerId = "unknown";
       parsed.placerName = "anonymous";
     }
@@ -3050,14 +3084,20 @@ const app = new Elysia()
 
     if (!Array.isArray(areaData.placements)) areaData.placements = [];
 
+    // Use multi-client session tracking with area context
     let personId = "unknown";
     let screenName = "anonymous";
-    try {
-      const account = await getAccountDataForCurrentProfile();
-      personId = account.personId || personId;
-      screenName = account.screenName || screenName;
-    } catch (e) {
-      console.warn("⚠️ Could not load active profile for multi-placement identity:", e);
+    const effectiveProfile = getEffectiveProfile(areaId);
+    if (effectiveProfile) {
+      try {
+        const account = await loadAccountData(effectiveProfile);
+        if (account) {
+          personId = account.personId || personId;
+          screenName = account.screenName || screenName;
+        }
+      } catch (e) {
+        console.warn("⚠️ Could not load profile for multi-placement identity:", e);
+      }
     }
 
     const newPlacements = placements.map((encoded: string) => {
@@ -3711,17 +3751,20 @@ const app = new Elysia()
       thingName = body.name;
     }
 
-    // ✅ Load identity from active profile
+    // ✅ Load identity using multi-client session tracking
     let creatorId = "unknown";
     let creatorName = "anonymous";
 
-    if (currentActiveProfile) {
+    const effectiveProfile = getMostRecentlyActiveProfile();
+    if (effectiveProfile) {
       try {
-        const account = await getAccountDataForCurrentProfile();
+        const profileAccountPath = `./data/person/accounts/${effectiveProfile}.json`;
+        const account = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
         creatorId = account.personId || creatorId;
         creatorName = account.screenName || creatorName;
+        console.log(`[THING CREATE] Creator: ${creatorName} (${creatorId}) from profile ${effectiveProfile}`);
       } catch (e) {
-        console.warn(`⚠️ Could not load active profile for object metadata. Falling back to default values.`, e);
+        console.warn(`⚠️ Could not load profile for object metadata. Falling back to default values.`, e);
       }
     }
 
