@@ -2096,18 +2096,26 @@ const app = new Elysia()
       return new Response("Missing area name", { status: 400 });
     }
 
-    // ✅ Load identity from active profile
+    // ✅ Load identity from the most recently active profile (multi-client tracking)
+    const effectiveProfile = getMostRecentlyActiveProfile();
     let personId: string;
     let personName: string;
 
     try {
-      const account = await getAccountDataForCurrentProfile();
+      if (!effectiveProfile) {
+        throw new Error("No active profile for area creation.");
+      }
+      
+      const profileAccountPath = `./data/person/accounts/${effectiveProfile}.json`;
+      const account = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
       personId = account.personId;
       personName = account.screenName;
 
       if (!personId || personId === "unknown" || !personName || personName === "anonymous") {
         throw new Error("Missing valid profile identity for area creation.");
       }
+      
+      console.log(`[AREA CREATE] Creating area "${areaName}" for profile ${effectiveProfile}`);
     } catch (e) {
       console.error("⚠️ Error loading profile for area creation:", e);
       return new Response("Could not load valid account identity for area creation.", { status: 500 });
@@ -2245,15 +2253,16 @@ const app = new Elysia()
 
     await fs.writeFile(listPath, JSON.stringify(areaList, null, 2));
 
-    // ✅ Inject area into current active profile under ownedAreas
+    // ✅ Inject area into the effective profile's ownedAreas
     try {
-      let accountData = await getAccountDataForCurrentProfile();
+      if (effectiveProfile) {
+        const profileAccountPath = `./data/person/accounts/${effectiveProfile}.json`;
+        const accountData = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
+        
+        accountData.ownedAreas = [...new Set([...(accountData.ownedAreas ?? []), areaId])];
 
-      accountData.ownedAreas = [...new Set([...(accountData.ownedAreas ?? []), areaId])];
-
-      if (currentActiveProfile) {
-        await saveAccountData(currentActiveProfile, accountData);
-        console.log(`[PROFILE] ✅ Updated ${currentActiveProfile}'s owned areas with ${areaId}`);
+        await saveAccountData(effectiveProfile, accountData);
+        console.log(`[PROFILE] ✅ Updated ${effectiveProfile}'s owned areas with ${areaId}`);
       } else {
         console.warn(`⚠️ No active profile to update owned areas for ${areaId}.`);
       }
@@ -2298,6 +2307,10 @@ const app = new Elysia()
 			return new Response("Missing areaId", { status: 400 });
 		}
 		
+		// Get effective profile using multi-client session tracking
+		const effectiveProfile = getEffectiveProfile(areaId);
+		console.log(`[AREA SETTINGS] Request to update ${areaId} by ${effectiveProfile}`);
+		
 		const loadPath = `./data/area/load/${areaId}.json`;
 		const infoPath = `./data/area/info/${areaId}.json`;
 		
@@ -2305,6 +2318,28 @@ const app = new Elysia()
 			const loadFile = Bun.file(loadPath);
 			if (!await loadFile.exists()) {
 				return new Response("Area not found", { status: 404 });
+			}
+			
+			// Check if the effective profile has permission to update this area
+			if (effectiveProfile) {
+				const profileAccountPath = `./data/person/accounts/${effectiveProfile}.json`;
+				try {
+					const accountData = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
+					const currentUserId = accountData.personId;
+					
+					// Check area info for editor permissions
+					const areaInfoFile = Bun.file(infoPath);
+					if (await areaInfoFile.exists()) {
+						const areaInfo = await areaInfoFile.json();
+						const hasPermission = areaInfo.editors?.some((editor: any) => editor.id === currentUserId) || false;
+						if (!hasPermission) {
+							console.log(`[AREA SETTINGS] Permission denied: ${effectiveProfile} is not an editor of ${areaId}`);
+							return new Response("Permission denied", { status: 403 });
+						}
+					}
+				} catch (e) {
+					console.warn(`[AREA SETTINGS] Could not verify permissions:`, e);
+				}
 			}
 			
 			const areaData = await loadFile.json();
@@ -2450,6 +2485,10 @@ const app = new Elysia()
 			});
 		}
 		
+		// Get effective profile using multi-client session tracking
+		const effectiveProfile = getEffectiveProfile(areaId);
+		console.log(`[AREA RENAME] Request to rename ${areaId} by ${effectiveProfile}`);
+		
 		const newName = name;
 		
 		const loadPath = `./data/area/load/${areaId}.json`;
@@ -2462,6 +2501,31 @@ const app = new Elysia()
 					status: 404, 
 					headers: { "Content-Type": "application/json" } 
 				});
+			}
+			
+			// Check if the effective profile has permission to rename this area
+			if (effectiveProfile) {
+				const profileAccountPath = `./data/person/accounts/${effectiveProfile}.json`;
+				try {
+					const accountData = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
+					const currentUserId = accountData.personId;
+					
+					// Check area info for editor permissions
+					const areaInfoFile = Bun.file(infoPath);
+					if (await areaInfoFile.exists()) {
+						const areaInfo = await areaInfoFile.json();
+						const hasPermission = areaInfo.editors?.some((editor: any) => editor.id === currentUserId) || false;
+						if (!hasPermission) {
+							console.log(`[AREA RENAME] Permission denied: ${effectiveProfile} is not an editor of ${areaId}`);
+							return new Response(JSON.stringify({ ok: false, error: "Permission denied" }), { 
+								status: 403, 
+								headers: { "Content-Type": "application/json" } 
+							});
+						}
+					}
+				} catch (e) {
+					console.warn(`[AREA RENAME] Could not verify permissions:`, e);
+				}
 			}
 			
 			const trimmedName = newName.trim();
@@ -2510,10 +2574,10 @@ const app = new Elysia()
 				areaByUrlName.set(areaUrlName, areaId);
 			}
 			
-			// Update profile's visitedAreas list
-			if (currentActiveProfile) {
+			// Update profile's visitedAreas list (for the profile that renamed it)
+			if (effectiveProfile) {
 				try {
-					const profilePath = `./data/person/accounts/${currentActiveProfile}.json`;
+					const profilePath = `./data/person/accounts/${effectiveProfile}.json`;
 					const profileFile = Bun.file(profilePath);
 					if (await profileFile.exists()) {
 						const profileData = await profileFile.json();
@@ -2522,7 +2586,7 @@ const app = new Elysia()
 							if (visitedEntry) {
 								visitedEntry.name = trimmedName;
 								await Bun.write(profilePath, JSON.stringify(profileData, null, 2));
-								console.log(`[AREA RENAME] Updated profile visitedAreas for ${currentActiveProfile}`);
+								console.log(`[AREA RENAME] Updated profile visitedAreas for ${effectiveProfile}`);
 							}
 						}
 					}
@@ -2606,6 +2670,10 @@ const app = new Elysia()
 			});
 		}
 		
+		// Get effective profile using multi-client session tracking
+		const effectiveProfile = getEffectiveProfile(areaId);
+		console.log(`[AREA SETEDITOR] Request to modify editors for ${areaId} by ${effectiveProfile}`);
+		
 		const infoPath = `./data/area/info/${areaId}.json`;
 		
 		try {
@@ -2619,6 +2687,26 @@ const app = new Elysia()
 			}
 			
 			const infoData = await infoFile.json();
+			
+			// Check if the effective profile is the owner (only owner can modify editors)
+			if (effectiveProfile) {
+				const profileAccountPath = `./data/person/accounts/${effectiveProfile}.json`;
+				try {
+					const accountData = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
+					const currentUserId = accountData.personId;
+					
+					const isOwner = infoData.editors?.some((editor: any) => editor.id === currentUserId && editor.isOwner) || false;
+					if (!isOwner) {
+						console.log(`[AREA SETEDITOR] Permission denied: ${effectiveProfile} is not the owner of ${areaId}`);
+						return new Response(JSON.stringify({ ok: false, error: "Only the owner can modify editors" }), { 
+							status: 403, 
+							headers: { "Content-Type": "application/json" } 
+						});
+					}
+				} catch (e) {
+					console.warn(`[AREA SETEDITOR] Could not verify permissions:`, e);
+				}
+			}
 			
 			// Initialize editors array if it doesn't exist
 			if (!infoData.editors) infoData.editors = [];
