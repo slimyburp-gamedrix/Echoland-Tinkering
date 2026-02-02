@@ -1147,6 +1147,11 @@ const app = new Elysia()
   .post(
     "/auth/start",
     async ({ cookie, request, body }) => {
+      // DEBUG: Log everything Unity sends - especially the Steam ast
+      console.log(`[DEBUG /auth/start] Headers:`, Object.fromEntries(request.headers.entries()));
+      console.log(`[DEBUG /auth/start] Cookies:`, cookie);
+      console.log(`[DEBUG /auth/start] Full Body:`, body);
+      
       const { ast } = cookie;
 
       // Get profile from header, query param, or body
@@ -1393,7 +1398,12 @@ const app = new Elysia()
       headers: { "Content-Type": "application/json" }
     });
   })
-  .post("/p", async ({ body }) => {
+  .post("/p", async ({ body, request, cookie }) => {
+    // DEBUG: Log everything Unity sends to help identify clients
+    console.log(`[DEBUG /p] Headers:`, Object.fromEntries(request.headers.entries()));
+    console.log(`[DEBUG /p] Cookies:`, cookie);
+    console.log(`[DEBUG /p] Body:`, body);
+    
     const { areaId } = body as any;
     
     // Track player presence using multi-client session tracking
@@ -1428,7 +1438,11 @@ const app = new Elysia()
   })
   .post(
     "/area/load",
-    async ({ body: { areaId, areaUrlName } }) => {
+    async ({ body: { areaId, areaUrlName }, request, cookie }) => {
+      // DEBUG: Log everything Unity sends to help identify clients
+      console.log(`[DEBUG /area/load] Headers:`, Object.fromEntries(request.headers.entries()));
+      console.log(`[DEBUG /area/load] Cookies:`, cookie);
+      
       console.log(`[AREA LOAD] Request received - areaId: ${areaId}, areaUrlName: ${areaUrlName}`);
       
       if (areaId) {
