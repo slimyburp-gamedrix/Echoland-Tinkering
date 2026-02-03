@@ -1786,6 +1786,7 @@ const app = new Elysia()
             return Response.json({ "ok": false, "_reasonDenied": "Private", "serveTime": 13 }, { status: 200 });
           }
         }
+        }
         else {
           console.error(`[AREA LOAD] ❌ Area URL name not in index: ${areaUrlName}`);
           return Response.json({ "ok": false, "_reasonDenied": "Private", "serveTime": 13 }, { status: 200 });
