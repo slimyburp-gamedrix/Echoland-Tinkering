@@ -89,42 +89,115 @@ const textEncoder = new TextEncoder();
 
 const ACCOUNTS_DIR = "./data/person/accounts";
 
-// Track the currently active profile (for Unity clients that don't send cookies)
+// Track the currently active profile (for admin panel display only)
 let currentActiveProfile: string | null = null;
 
 // Track the next client profile to auto-assign
 let nextClientProfile: string | null = null;
 
+// ============ COOKIE-BASED SESSION TRACKING ============
+// Simple and reliable: each client gets a unique session token in their cookie
+// We map sessionToken → profile info
+
+interface ClientSession {
+  profileName: string;
+  personId: string;
+  homeAreaId: string;
+  currentAreaId: string | null;
+}
+
+// Map sessionToken → session (THE primary identifier - from cookie)
+const sessionsByToken = new Map<string, ClientSession>();
+
+// Register a client session with a token
+function registerSession(sessionToken: string, profileName: string, personId: string, homeAreaId: string): void {
+  const session: ClientSession = {
+    profileName,
+    personId,
+    homeAreaId,
+    currentAreaId: homeAreaId
+  };
+  sessionsByToken.set(sessionToken, session);
+  console.log(`[SESSION] Registered session ${sessionToken.substring(0, 12)}... for ${profileName}`);
+}
+
+// Get profile from session token (the cookie value)
+function getProfileFromToken(sessionToken: string | undefined): string | null {
+  if (!sessionToken) return null;
+  const session = sessionsByToken.get(sessionToken);
+  return session?.profileName || null;
+}
+
+// Get full session from token
+function getSessionFromToken(sessionToken: string | undefined): ClientSession | null {
+  if (!sessionToken) return null;
+  return sessionsByToken.get(sessionToken) || null;
+}
+
+// Update the current area for a session
+function updateSessionArea(sessionToken: string | undefined, areaId: string): void {
+  if (!sessionToken) return;
+  const session = sessionsByToken.get(sessionToken);
+  if (session) {
+    session.currentAreaId = areaId;
+  }
+}
+
+// Get all active sessions (for admin panel)
+function getAllSessions(): Map<string, ClientSession> {
+  return sessionsByToken;
+}
+
+// COMPATIBILITY: Get most recently active profile (fallback for code without cookie access)
+// Returns currentActiveProfile or first session's profile as fallback
+function getMostRecentlyActiveProfile(): string | null {
+  // First try currentActiveProfile (set at auth time)
+  if (currentActiveProfile) return currentActiveProfile;
+  // Fallback: return first session's profile
+  const firstSession = sessionsByToken.values().next().value;
+  return firstSession?.profileName || null;
+}
+
+// COMPATIBILITY: Get effective profile with area context (for legacy code)
+// In cookie-based system, we prefer explicit cookie lookup, but this provides a fallback
+function getEffectiveProfile(areaId?: string | null): string | null {
+  return getMostRecentlyActiveProfile();
+}
+// ============ END COOKIE-BASED SESSION TRACKING ============
+
 function getAccountPathForProfile(profileName: string): string {
   return `${ACCOUNTS_DIR}/${profileName}.json`;
 }
 
-// Returns the account path for the current active profile
+// Get account path for the most recently active profile (uses session tracking)
 async function getAccountPath(): Promise<string> {
-  if (!currentActiveProfile) {
-    throw new Error("No active profile set");
+  const effectiveProfile = getMostRecentlyActiveProfile();
+  if (!effectiveProfile) {
+    throw new Error("No active session");
   }
-  return getAccountPathForProfile(currentActiveProfile);
+  return getAccountPathForProfile(effectiveProfile);
 }
 
-async function getAccountDataForCurrentProfile(): Promise<Record<string, any>> {
-  if (!currentActiveProfile) {
-    return {
-      personId: "unknown",
-      screenName: "anonymous",
-      homeAreaId: "",
-      attachments: {},
-      inventory: { pages: {} },
-      ownedAreas: []
-    };
-  }
-
-  const profilePath = getAccountPathForProfile(currentActiveProfile);
+// Load account data for a specific profile
+async function loadAccountData(profileName: string): Promise<Record<string, any> | null> {
+  const profilePath = getAccountPathForProfile(profileName);
   try {
     const data = await fs.readFile(profilePath, "utf-8");
     return JSON.parse(data);
   } catch (e) {
-    console.warn(`⚠️ Could not load profile ${currentActiveProfile}:`, e);
+    console.warn(`⚠️ Could not load profile ${profileName}:`, e);
+    return null;
+  }
+}
+
+// DEPRECATED: Use getMostRecentlyActiveProfile() + loadAccountData() instead
+// This function is kept for backwards compatibility but uses session tracking
+async function getAccountDataForCurrentProfile(): Promise<Record<string, any>> {
+  // Use session tracking to find the most recently active profile
+  const effectiveProfile = getMostRecentlyActiveProfile();
+  
+  if (!effectiveProfile) {
+    console.warn(`[ACCOUNT] No active session - returning anonymous data`);
     return {
       personId: "unknown",
       screenName: "anonymous",
@@ -134,6 +207,20 @@ async function getAccountDataForCurrentProfile(): Promise<Record<string, any>> {
       ownedAreas: []
     };
   }
+
+  const account = await loadAccountData(effectiveProfile);
+  if (account) {
+    return account;
+  }
+  
+  return {
+    personId: "unknown",
+    screenName: "anonymous",
+    homeAreaId: "",
+    attachments: {},
+    inventory: { pages: {} },
+    ownedAreas: []
+  };
 }
 
 const HOST = process.env.HOST ?? "0.0.0.0";
@@ -1247,20 +1334,21 @@ const app = new Elysia()
       // Setup the new profile
       const account = await setupClientProfile(profileName);
       
-      // Set this as the active profile
-      currentActiveProfile = profileName;
-      console.log(`[AUTH] ✅ Active profile set to: ${profileName}`);
+      // Generate session token and register it
+      const sessionToken = `s:${generateObjectId()}`;
+      registerSession(sessionToken, profileName, account.personId, account.homeAreaId);
       
-      // Sync profile data to legacy file (for endpoints that read from it)
+      // Set session cookie (Unity will send this back as 's' cookie)
+      ast.value = sessionToken;
+      ast.httpOnly = true;
+      ast.path = "/";
+      
+      // Set this as the active profile (for admin panel display only)
+      currentActiveProfile = profileName;
+      console.log(`[AUTH] ✅ Session created for ${profileName} (token: ${sessionToken.substring(0, 12)}...)`);
       
       // Notify admin panel of profile change
       notifyProfileChange();
-
-      // Set session cookie
-      const activeAstToken = `s:${generateObjectId()}`;
-      ast.value = activeAstToken;
-      ast.httpOnly = true;
-      ast.path = "/";
 
       const attachmentsObj = typeof account.attachments === "string"
         ? JSON.parse(account.attachments || "{}")
@@ -1464,46 +1552,50 @@ const app = new Elysia()
       headers: { "Content-Type": "application/json" }
     });
   })
-  .post("/p", async ({ body }) => {
+  .post("/p", async ({ body, cookie }) => {
     const { areaId } = body as any;
     
-    // Track player presence if we have an active profile and area
-    if (currentActiveProfile && areaId) {
-      try {
-        const accountData = await getAccountDataForCurrentProfile();
-        if (accountData.personId && accountData.personId !== "unknown") {
-          updatePlayerPresence(accountData.personId, currentActiveProfile, areaId);
-        }
-      } catch (e) {
-        // Silently ignore presence tracking errors
-      }
+    // Get profile from session cookie (the 's' cookie Unity sends)
+    const sessionToken = (cookie as any).s?.value as string | undefined;
+    const session = getSessionFromToken(sessionToken);
+    
+    if (session && areaId) {
+      // Update player presence
+      updatePlayerPresence(session.personId, session.profileName, areaId);
+      // Update current area in session
+      updateSessionArea(sessionToken, areaId);
     }
     
     return { "vMaj": 188, "vMinSrv": 1 };
   })
   .post(
     "/area/load",
-    async ({ body: { areaId, areaUrlName } }) => {
-      console.log(`[AREA LOAD] Request received - areaId: ${areaId}, areaUrlName: ${areaUrlName}`);
+    async ({ body: { areaId, areaUrlName }, request, cookie }) => {
+      // Get the REQUESTER from their session cookie
+      const sessionToken = (cookie as any).s?.value as string | undefined;
+      const session = getSessionFromToken(sessionToken);
+      const requesterProfile = session?.profileName || null;
+      const requesterId = session?.personId || "unknown";
+      
+      console.log(`[AREA LOAD] Request from ${requesterProfile || 'unknown'} - areaId: ${areaId}, areaUrlName: ${areaUrlName}`);
       
       if (areaId) {
         const filePath = path.resolve("./data/area/load/", areaId + ".json");
         const file = createFileHandle(filePath);
-        console.log(`[AREA LOAD] Checking file: ${filePath}`);
 
         if (await file.exists()) {
           try {
             const areaData = await file.json();
-            console.log(`[AREA LOAD] ✅ Successfully loaded area ${areaId} (${areaData.areaName || areaData.name || 'unnamed'})`);
+            console.log(`[AREA LOAD] ✅ Loaded area ${areaId} (${areaData.areaName || 'unnamed'})`);
 
-            // Track this area visit for the current user
-            try {
-              const areaName = areaData.areaName || areaData.name || "Unknown Area";
-              console.log(`[VISITED] Tracking visit to area ${areaId} (${areaName})`);
+            // Update session's current area
+            updateSessionArea(sessionToken, areaId);
 
-              // Track per-user visited areas using the profile-specific account file
-              if (currentActiveProfile) {
-                const profileAccountPath = `./data/person/accounts/${currentActiveProfile}.json`;
+            // Track this area visit for the REQUESTER
+            if (requesterProfile) {
+              try {
+                const areaName = areaData.areaName || areaData.name || "Unknown Area";
+                const profileAccountPath = `./data/person/accounts/${requesterProfile}.json`;
                 const accountData = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
 
                 // Initialize visitedAreas if it doesn't exist
@@ -1512,46 +1604,61 @@ const app = new Elysia()
                 }
 
                 // Add to user's personal visited list if not already there
-                const alreadyVisitedByUser = accountData.visitedAreas.some((a: any) => a.id === areaId);
+                const alreadyVisited = accountData.visitedAreas.some((a: any) => a.id === areaId);
 
-                if (!alreadyVisitedByUser) {
-                  const visitEntry = {
+                if (!alreadyVisited) {
+                  accountData.visitedAreas.push({
                     id: areaId,
                     name: areaName,
                     playerCount: 0,
                     visitedAt: new Date().toISOString()
-                  };
+                  });
 
-                  accountData.visitedAreas.push(visitEntry);
-
-                  // Keep only recent 200 areas to prevent bloat
+                  // Keep only recent 200 areas
                   if (accountData.visitedAreas.length > 200) {
                     accountData.visitedAreas = accountData.visitedAreas.slice(-200);
                   }
 
                   await writeFileWithPermissions(profileAccountPath, JSON.stringify(accountData, null, 2));
-                  console.log(`[VISITED] ✅ Added area ${areaId} (${areaName}) to ${currentActiveProfile}'s visited list. Total: ${accountData.visitedAreas.length}`);
-                } else {
-                  console.log(`[VISITED] Area ${areaId} already in ${currentActiveProfile}'s visited list`);
+                  console.log(`[VISITED] ✅ Added ${areaId} to ${requesterProfile}'s visited list`);
                 }
+              } catch (error) {
+                console.error("[VISITED] Error tracking visit:", error);
+              }
+            }
+
+            // Check edit permissions for the REQUESTER
+            let hasEditPermission = false;
+            let isOwner = false;
+
+            try {
+              // First try area info file
+              const areaInfoPath = path.resolve("./data/area/info/", areaId + ".json");
+              const areaInfoFile = createFileHandle(areaInfoPath);
+              if (await areaInfoFile.exists()) {
+                const areaInfo = await areaInfoFile.json();
+                hasEditPermission = areaInfo.editors?.some((editor: any) => editor.id === requesterId) || false;
+                isOwner = areaInfo.editors?.some((editor: any) => editor.id === requesterId && editor.isOwner) || false;
+              } else {
+                // Check if requester is the creator
+                hasEditPermission = areaData.creatorId === requesterId;
+                isOwner = areaData.creatorId === requesterId;
               }
 
-              // NOTE: Do NOT add to global visited list - visited areas are per-profile only
-            } catch (error) {
-              console.error("[VISITED] Error tracking visit for area", areaId, ":", error);
+              console.log(`[AREA LOAD] User ${requesterId} (${requesterProfile}) - edit: ${hasEditPermission}, owner: ${isOwner}`);
+            } catch (err) {
+              console.warn(`[AREA LOAD] Could not check permissions:`, err);
             }
 
             // Also verify the bundle exists
             let bundleKey = areaData.areaKey;
             if (!bundleKey) {
-              // Try to find bundle file if areaKey is missing
               try {
                 const bundleDir = `./data/area/bundle/${areaId}`;
                 const files = await fs.readdir(bundleDir);
                 const jsonFile = files.find(f => f.endsWith('.json'));
                 if (jsonFile) {
                   bundleKey = jsonFile.replace('.json', '');
-                  console.log(`[AREA LOAD] Found bundle key from file: ${bundleKey}`);
                 }
               } catch {
                 // Directory doesn't exist or no files
@@ -1561,27 +1668,6 @@ const app = new Elysia()
             const bundlePath = path.resolve("./data/area/bundle/", areaId, (bundleKey || '') + ".json");
             const bundleExists = await fs.access(bundlePath).then(() => true).catch(() => false);
             console.log(`[AREA LOAD] Bundle ${bundleKey || 'undefined'} exists: ${bundleExists}`);
-
-            // Simple permission check - assume creator has edit permissions
-            let hasEditPermission = false;
-            let isOwner = false;
-
-            try {
-              let currentUserId;
-              if (currentActiveProfile) {
-                const profileAccountPath = `./data/person/accounts/${currentActiveProfile}.json`;
-                const account = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
-                currentUserId = account.personId;
-              } else {
-                const account = await getAccountDataForCurrentProfile();
-                currentUserId = account.personId;
-              }
-              hasEditPermission = areaData.creatorId === currentUserId || areaData.areaCreatorId === currentUserId;
-              isOwner = areaData.creatorId === currentUserId || areaData.areaCreatorId === currentUserId;
-              console.log(`[AREA LOAD] User ${currentUserId} has edit permission: ${hasEditPermission}, is owner: ${isOwner}`);
-            } catch (err) {
-              console.warn(`[AREA LOAD] Could not check edit permissions for area ${areaId}:`, err);
-            }
 
             return {
               ...areaData,
@@ -1615,66 +1701,61 @@ const app = new Elysia()
           if (await file.exists()) {
             console.log(`[AREA LOAD] ✅ Found and loading area by URL name: ${areaUrlName}`);
 
-            // Load area data and trigger visit tracking
             const areaData = await file.json();
 
-            // Track this area visit for the current user
-            try {
-              const areaName = areaData.areaName || areaData.name || "Unknown Area";
-              console.log(`[VISITED] Tracking visit to area ${foundAreaId} (${areaName}) via URL name`);
+            // Update session's current area
+            updateSessionArea(sessionToken, foundAreaId);
 
-              // Track per-user visited areas using the profile-specific account file
-              if (currentActiveProfile) {
-                const profileAccountPath = `./data/person/accounts/${currentActiveProfile}.json`;
+            // Track this area visit for the REQUESTER
+            if (requesterProfile) {
+              try {
+                const areaName = areaData.areaName || areaData.name || "Unknown Area";
+                const profileAccountPath = `./data/person/accounts/${requesterProfile}.json`;
                 const accountData = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
 
-                // Initialize visitedAreas if it doesn't exist
                 if (!accountData.visitedAreas || !Array.isArray(accountData.visitedAreas)) {
                   accountData.visitedAreas = [];
                 }
 
-                // Add to user's personal visited list if not already there
-                const alreadyVisitedByUser = accountData.visitedAreas.some((a: any) => a.id === foundAreaId);
+                const alreadyVisited = accountData.visitedAreas.some((a: any) => a.id === foundAreaId);
 
-                if (!alreadyVisitedByUser) {
-                  const visitEntry = {
+                if (!alreadyVisited) {
+                  accountData.visitedAreas.push({
                     id: foundAreaId,
                     name: areaName,
                     playerCount: 0,
                     visitedAt: new Date().toISOString()
-                  };
+                  });
 
-                  accountData.visitedAreas.push(visitEntry);
-
-                  // Keep only recent 200 areas to prevent bloat
                   if (accountData.visitedAreas.length > 200) {
                     accountData.visitedAreas = accountData.visitedAreas.slice(-200);
                   }
 
                   await writeFileWithPermissions(profileAccountPath, JSON.stringify(accountData, null, 2));
-                  console.log(`[VISITED] ✅ Added area ${foundAreaId} (${areaName}) to ${currentActiveProfile}'s visited list. Total: ${accountData.visitedAreas.length}`);
-                } else {
-                  console.log(`[VISITED] Area ${foundAreaId} already in ${currentActiveProfile}'s visited list`);
+                  console.log(`[VISITED] ✅ Added ${foundAreaId} to ${requesterProfile}'s visited list via URL`);
                 }
-              }
-
-              // NOTE: Do NOT add to global visited list - visited areas are per-profile only
-            } catch (error) {
-              console.error("[VISITED] Error tracking visit for area", foundAreaId, ":", error);
+              } catch (error) {
+              console.error("[VISITED] Error tracking visit:", error);
             }
 
-            // Simple permission check - assume creator has edit permissions
+            // Check edit permissions for the REQUESTER
             let hasEditPermission = false;
             let isOwner = false;
 
             try {
-              const account = await getAccountDataForCurrentProfile();
-              const currentUserId = account.personId;
-              hasEditPermission = areaData.creatorId === currentUserId || areaData.areaCreatorId === currentUserId;
-              isOwner = areaData.creatorId === currentUserId || areaData.areaCreatorId === currentUserId;
-              console.log(`[AREA LOAD] User ${currentUserId} has edit permission: ${hasEditPermission}, is owner: ${isOwner}`);
+              const areaInfoPath = path.resolve("./data/area/info/", foundAreaId + ".json");
+              const areaInfoFile = createFileHandle(areaInfoPath);
+              if (await areaInfoFile.exists()) {
+                const areaInfo = await areaInfoFile.json();
+                hasEditPermission = areaInfo.editors?.some((editor: any) => editor.id === requesterId) || false;
+                isOwner = areaInfo.editors?.some((editor: any) => editor.id === requesterId && editor.isOwner) || false;
+              } else {
+                hasEditPermission = areaData.creatorId === requesterId;
+                isOwner = areaData.creatorId === requesterId;
+              }
+              console.log(`[AREA LOAD] User ${requesterId} (${requesterProfile}) - edit: ${hasEditPermission}, owner: ${isOwner}`);
             } catch (err) {
-              console.warn(`[AREA LOAD] Could not check edit permissions for area ${foundAreaId}:`, err);
+              console.warn(`[AREA LOAD] Could not check permissions:`, err);
             }
 
             // Also verify the bundle exists
@@ -1992,7 +2073,14 @@ const app = new Elysia()
       newName: t.String()
     })
   })
-  .post("/area/lists", async () => {
+  .post("/area/lists", async ({ cookie }) => {
+    // Get profile from session cookie
+    const sessionToken = (cookie as any).s?.value as string | undefined;
+    const session = getSessionFromToken(sessionToken);
+    const effectiveProfile = session?.profileName || null;
+    
+    console.log(`[AREA LIST] Request from ${effectiveProfile || 'unknown session'}`);
+
     const dynamic = await getDynamicAreaList();
 
     // Helper to add live player counts to area list
@@ -2008,9 +2096,9 @@ const app = new Elysia()
     let homeAreaId: string | null = null;
     let userVisitedAreas: any[] = [];
 
-    if (currentActiveProfile) {
+    if (effectiveProfile) {
       try {
-        const profileAccountPath = `./data/person/accounts/${currentActiveProfile}.json`;
+        const profileAccountPath = `./data/person/accounts/${effectiveProfile}.json`;
         const accountData = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
         ownedAreaIds = accountData.ownedAreas || [];
         homeAreaId = accountData.homeAreaId;
@@ -2021,14 +2109,13 @@ const app = new Elysia()
           ownedAreaIds.push(homeAreaId);
         }
 
-        console.log(`[AREA LIST] Loaded ${userVisitedAreas.length} visited areas for profile ${currentActiveProfile}`);
+        console.log(`[AREA LIST] ${effectiveProfile} has ${userVisitedAreas.length} visited, ${ownedAreaIds.length} owned areas`);
       } catch (e) {
-        console.warn("[AREA LIST] Could not load profile for area filtering:", e);
-        // No profile data = empty visited list (per-profile only)
+        console.warn("[AREA LIST] Could not load profile:", e);
         userVisitedAreas = [];
       }
     } else {
-      // No active profile = empty visited list (per-profile only)
+      // No session = empty personal lists
       userVisitedAreas = [];
     }
 
@@ -2123,24 +2210,36 @@ const app = new Elysia()
       return new Response("Server error during repair", { status: 500 });
     }
   })
-  .post("/area", async ({ body }) => {
+  .post("/area", async ({ body, cookie }) => {
     const areaName = body?.name;
     if (!areaName || typeof areaName !== "string") {
       return new Response("Missing area name", { status: 400 });
     }
 
-    // ✅ Load identity from account.json
+    // Get profile from session cookie
+    const sessionToken = (cookie as any).s?.value as string | undefined;
+    const session = getSessionFromToken(sessionToken);
+    const effectiveProfile = session?.profileName || null;
+
+    // ✅ Load identity from profile
     let personId: string;
     let personName: string;
 
     try {
-      const account = await getAccountDataForCurrentProfile();
+      let account: Record<string, any> | null = null;
+      if (effectiveProfile) {
+        account = await loadAccountData(effectiveProfile);
+      }
+      if (!account) {
+        account = await getAccountDataForCurrentProfile();
+      }
       personId = account.personId;
       personName = account.screenName;
 
       if (!personId || !personName) {
-        throw new Error("Missing personId or screenName in account.json");
+        throw new Error("Missing personId or screenName");
       }
+      console.log(`[AREA CREATE] Creating area "${areaName}" for ${effectiveProfile || personName}`);
     } catch {
       return new Response("Could not load valid account identity", { status: 500 });
     }
@@ -2472,8 +2571,16 @@ const app = new Elysia()
 		}),
 		type: "form"
 	})
-	.post("/area/rename", async ({ body }) => {
+	.post("/area/rename", async ({ body, cookie }) => {
 		const { areaId, name } = body as any;
+		
+		// Get profile from session cookie
+		const sessionToken = (cookie as any).s?.value as string | undefined;
+		const session = getSessionFromToken(sessionToken);
+		const effectiveProfile = session?.profileName || null;
+		const requesterId = session?.personId || "unknown";
+		
+		console.log(`[AREA RENAME] Request from ${effectiveProfile || 'unknown'} to rename area ${areaId}`);
 		
 		if (!areaId || typeof areaId !== "string") {
 			return new Response(JSON.stringify({ ok: false, error: "Missing areaId" }), { 
@@ -2549,10 +2656,10 @@ const app = new Elysia()
 				areaByUrlName.set(areaUrlName, areaId);
 			}
 			
-			// Update profile's visitedAreas list
-			if (currentActiveProfile) {
+			// Update profile's visitedAreas list (use session-based profile)
+			if (effectiveProfile) {
 				try {
-					const profilePath = `./data/person/accounts/${currentActiveProfile}.json`;
+					const profilePath = `./data/person/accounts/${effectiveProfile}.json`;
 					const profileFile = createFileHandle(profilePath);
 					if (await profileFile.exists()) {
 						const profileData = await profileFile.json();
@@ -2561,7 +2668,7 @@ const app = new Elysia()
 							if (visitedEntry) {
 								visitedEntry.name = trimmedName;
 								await writeFileWithPermissions(profilePath, JSON.stringify(profileData, null, 2));
-								console.log(`[AREA RENAME] Updated profile visitedAreas for ${currentActiveProfile}`);
+								console.log(`[AREA RENAME] Updated profile visitedAreas for ${effectiveProfile}`);
 							}
 						}
 					}
@@ -2730,60 +2837,53 @@ const app = new Elysia()
 		console.log("[REGISTERUSAGEMODE] Received:", body);
 		return { ok: true };
 	})
-  .post("/area/visit", async ({ body }) => {
+  .post("/area/visit", async ({ body, cookie }) => {
     const { areaId, name } = body;
     if (!areaId || !name) return new Response("Missing data", { status: 400 });
 
+    // Get profile from session cookie
+    const sessionToken = (cookie as any).s?.value as string | undefined;
+    const session = getSessionFromToken(sessionToken);
+    const effectiveProfile = session?.profileName || null;
+
     try {
       // Track per-user visited areas using the profile-specific account file
-      if (!currentActiveProfile) {
-        console.log(`[VISITED] No active profile, falling back to global tracking`);
-        throw new Error("No active profile");
+      if (!effectiveProfile) {
+        console.log(`[VISITED] No active session, cannot track visit`);
+        return { ok: true }; // Silently succeed but don't track
       }
 
-      const profileAccountPath = `./data/person/accounts/${currentActiveProfile}.json`;
-      console.log(`[VISITED] Processing visit request for area ${areaId} (${name}) using profile: ${currentActiveProfile}`);
+      const profileAccountPath = `./data/person/accounts/${effectiveProfile}.json`;
+      console.log(`[VISITED] Processing visit request for area ${areaId} (${name}) from ${effectiveProfile}`);
 
       const accountData = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
-      console.log(`[VISITED] Current user: ${accountData.screenName} (${accountData.personId})`);
 
       // Initialize visitedAreas if it doesn't exist
       if (!accountData.visitedAreas || !Array.isArray(accountData.visitedAreas)) {
         accountData.visitedAreas = [];
-        console.log(`[VISITED] Initialized visitedAreas array for user`);
       }
 
       // Add to user's personal visited list if not already there
-      const alreadyVisitedByUser = accountData.visitedAreas.some((a: any) => a.id === areaId);
-      console.log(`[VISITED] User ${accountData.screenName} has ${alreadyVisitedByUser ? 'already' : 'not'} visited area ${areaId}`);
+      const alreadyVisited = accountData.visitedAreas.some((a: any) => a.id === areaId);
 
-      if (!alreadyVisitedByUser) {
-        const visitEntry = {
+      if (!alreadyVisited) {
+        accountData.visitedAreas.push({
           id: areaId,
           name,
           playerCount: 0,
           visitedAt: new Date().toISOString()
-        };
-
-        accountData.visitedAreas.push(visitEntry);
-        console.log(`[VISITED] Added visit entry:`, visitEntry);
+        });
 
         // Keep only recent 200 areas to prevent bloat
         if (accountData.visitedAreas.length > 200) {
           accountData.visitedAreas = accountData.visitedAreas.slice(-200);
-          console.log(`[VISITED] Trimmed visited list to 200 most recent entries`);
         }
 
         await writeFileWithPermissions(profileAccountPath, JSON.stringify(accountData, null, 2));
-        console.log(`[VISITED] ✅ Successfully updated ${accountData.screenName}'s visited list in profile ${currentActiveProfile}. Total areas visited: ${accountData.visitedAreas.length}`);
-      } else {
-        console.log(`[VISITED] Area ${areaId} already in ${accountData.screenName}'s visited list`);
+        console.log(`[VISITED] ✅ Added ${areaId} to ${effectiveProfile}'s visited list`);
       }
-
-      // NOTE: Do NOT add to global visited list - visited areas are per-profile only
     } catch (error) {
-      console.error("Error tracking area visit:", error);
-      // Profile-specific visit tracking only, no global fallback
+      console.error("[VISITED] Error tracking visit:", error);
     }
 
     return { ok: true };
@@ -2801,15 +2901,26 @@ const app = new Elysia()
     app.routes.find(r => r.path === '/placement/info')!
       .handler({ body: { areaId, placementId } } as any)
   )
-  .post("/placement/new", async ({ body }) => {
+  .post("/placement/new", async ({ body, cookie }) => {
     const { areaId, placement } = body;
     const parsed = JSON.parse(decodeURIComponent(placement));
     const placementId = parsed.Id;
     const placementPath = `./data/placement/info/${areaId}/${placementId}.json`;
 
-    // Inject identity from account.json
+    // Get profile from session cookie
+    const sessionToken = (cookie as any).s?.value as string | undefined;
+    const session = getSessionFromToken(sessionToken);
+    const effectiveProfile = session?.profileName || null;
+
+    // Inject identity from profile
     try {
-      const account = await getAccountDataForCurrentProfile();
+      let account: Record<string, any> | null = null;
+      if (effectiveProfile) {
+        account = await loadAccountData(effectiveProfile);
+      }
+      if (!account) {
+        account = await getAccountDataForCurrentProfile();
+      }
       parsed.placerId = account.personId || "unknown";
       parsed.placerName = account.screenName || "anonymous";
     } catch {
@@ -2879,14 +2990,25 @@ const app = new Elysia()
   .get("person/friendsbystr",
     () => canned_friendsbystr
   )
-  .post("/placement/save", async ({ body: { areaId, placementId, data } }) => {
+  .post("/placement/save", async ({ body: { areaId, placementId, data }, cookie }) => {
     if (!areaId || !placementId || !data) {
       console.error("Missing required placement fields");
       return { ok: false, error: "Invalid placement data" };
     }
 
+    // Get profile from session cookie
+    const sessionToken = (cookie as any).s?.value as string | undefined;
+    const session = getSessionFromToken(sessionToken);
+    const effectiveProfile = session?.profileName || null;
+
     try {
-      const account = await getAccountDataForCurrentProfile();
+      let account: Record<string, any> | null = null;
+      if (effectiveProfile) {
+        account = await loadAccountData(effectiveProfile);
+      }
+      if (!account) {
+        account = await getAccountDataForCurrentProfile();
+      }
       data.placerId = account.personId || "unknown";
       data.placerName = account.screenName || "anonymous";
     } catch {
@@ -2944,14 +3066,25 @@ const app = new Elysia()
       placementId: t.String()
     })
   })
-  .post("/placement/update", async ({ body }) => {
+  .post("/placement/update", async ({ body, cookie }) => {
     const { areaId, placement } = body;
     const parsed = JSON.parse(decodeURIComponent(placement));
     const placementId = parsed.Id;
     const placementPath = `./data/placement/info/${areaId}/${placementId}.json`;
 
+    // Get profile from session cookie
+    const sessionToken = (cookie as any).s?.value as string | undefined;
+    const session = getSessionFromToken(sessionToken);
+    const effectiveProfile = session?.profileName || null;
+
     try {
-      const account = await getAccountDataForCurrentProfile();
+      let account: Record<string, any> | null = null;
+      if (effectiveProfile) {
+        account = await loadAccountData(effectiveProfile);
+      }
+      if (!account) {
+        account = await getAccountDataForCurrentProfile();
+      }
       parsed.placerId = account.personId || "unknown";
       parsed.placerName = account.screenName || "anonymous";
     } catch {
@@ -3644,11 +3777,16 @@ const app = new Elysia()
     body: t.Unknown(),
     type: "form"
   })
-  .post("/thing", async ({ body }) => {
+  .post("/thing", async ({ body, cookie }) => {
     const thingId = generateObjectId();
     const infoPath = `./data/thing/info/${thingId}.json`;
     const defPath = `./data/thing/def/${thingId}.json`;
     const tagsPath = `./data/thing/tags/${thingId}.json`;
+
+    // Get profile from session cookie
+    const sessionToken = (cookie as any).s?.value as string | undefined;
+    const session = getSessionFromToken(sessionToken);
+    const effectiveProfile = session?.profileName || null;
 
     // ✅ Parse the definition from the client
     let thingDef: Record<string, any> = {};
@@ -3670,15 +3808,21 @@ const app = new Elysia()
       thingName = body.name;
     }
 
-    // ✅ Load identity from account.json
+    // ✅ Load identity from profile
     let creatorId = "unknown";
     let creatorName = "anonymous";
     try {
-      const account = await getAccountDataForCurrentProfile();
+      let account: Record<string, any> | null = null;
+      if (effectiveProfile) {
+        account = await loadAccountData(effectiveProfile);
+      }
+      if (!account) {
+        account = await getAccountDataForCurrentProfile();
+      }
       creatorId = account.personId || creatorId;
       creatorName = account.screenName || creatorName;
     } catch (e) {
-      console.warn("⚠️ Could not load account.json for object metadata.", e);
+      console.warn("⚠️ Could not load profile for object metadata.", e);
     }
 
     // ✅ Build thinginfo object
