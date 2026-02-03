@@ -213,14 +213,14 @@ async function getAccountDataForCurrentProfile(): Promise<Record<string, any>> {
     return account;
   }
   
-  return {
-    personId: "unknown",
-    screenName: "anonymous",
-    homeAreaId: "",
-    attachments: {},
-    inventory: { pages: {} },
-    ownedAreas: []
-  };
+    return {
+      personId: "unknown",
+      screenName: "anonymous",
+      homeAreaId: "",
+      attachments: {},
+      inventory: { pages: {} },
+      ownedAreas: []
+    };
 }
 
 const HOST = process.env.HOST ?? "0.0.0.0";
@@ -426,15 +426,6 @@ async function listProfiles(): Promise<string[]> {
     return files.filter((name) => name.endsWith(".json")).map((name) => name.replace(".json", ""));
   } catch {
     return [];
-  }
-}
-
-async function loadAccountData(profileName: string): Promise<Record<string, any> | null> {
-  try {
-    const data = await fs.readFile(getAccountPathForProfile(profileName), "utf-8");
-    return JSON.parse(data);
-  } catch {
-    return null;
   }
 }
 
@@ -986,30 +977,30 @@ function searchThings(term: string, limit: number = 0): string[] {
 // ✅ Inject default home area into arealist.json if not already present
 // Only run if we have a valid active profile (not on fresh startup with no profiles)
 if (currentActiveProfile) {
-  try {
-    const account = await getAccountDataForCurrentProfile();
-    const personId = account.personId;
-    const personName = account.screenName;
-    const defaultAreaId = account.homeAreaId;
-    const defaultAreaName = `${personName}'s home`;
+try {
+  const account = await getAccountDataForCurrentProfile();
+  const personId = account.personId;
+  const personName = account.screenName;
+  const defaultAreaId = account.homeAreaId;
+  const defaultAreaName = `${personName}'s home`;
 
     // Only inject if we have a valid homeAreaId (not empty) and valid screenName (not anonymous fallback)
     if (defaultAreaId && personId !== "unknown" && personName !== "anonymous") {
-      const listPath = "./data/area/arealist.json";
-      let alreadyExists = false;
+  const listPath = "./data/area/arealist.json";
+  let alreadyExists = false;
 
-      try {
-        const areaList = await createFileHandle(listPath).json();
-        alreadyExists = areaList.created?.some((a: any) => a.id === defaultAreaId);
-      } catch { }
+  try {
+    const areaList = await createFileHandle(listPath).json();
+    alreadyExists = areaList.created?.some((a: any) => a.id === defaultAreaId);
+  } catch { }
 
-      if (!alreadyExists) {
-        await injectInitialAreaToList(defaultAreaId, defaultAreaName);
-        console.log(`✅ Injected default area "${defaultAreaName}" into arealist.json`);
+  if (!alreadyExists) {
+    await injectInitialAreaToList(defaultAreaId, defaultAreaName);
+    console.log(`✅ Injected default area "${defaultAreaName}" into arealist.json`);
       }
-    }
-  } catch {
-    // No legacy account yet – skip default area injection until a profile connects
+  }
+} catch {
+  // No legacy account yet – skip default area injection until a profile connects
   }
 }
 
@@ -1593,8 +1584,8 @@ const app = new Elysia()
 
             // Track this area visit for the REQUESTER
             if (requesterProfile) {
-              try {
-                const areaName = areaData.areaName || areaData.name || "Unknown Area";
+            try {
+              const areaName = areaData.areaName || areaData.name || "Unknown Area";
                 const profileAccountPath = `./data/person/accounts/${requesterProfile}.json`;
                 const accountData = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
 
@@ -1708,8 +1699,8 @@ const app = new Elysia()
 
             // Track this area visit for the REQUESTER
             if (requesterProfile) {
-              try {
-                const areaName = areaData.areaName || areaData.name || "Unknown Area";
+            try {
+              const areaName = areaData.areaName || areaData.name || "Unknown Area";
                 const profileAccountPath = `./data/person/accounts/${requesterProfile}.json`;
                 const accountData = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
 
@@ -1733,8 +1724,8 @@ const app = new Elysia()
 
                   await writeFileWithPermissions(profileAccountPath, JSON.stringify(accountData, null, 2));
                   console.log(`[VISITED] ✅ Added ${foundAreaId} to ${requesterProfile}'s visited list via URL`);
-                }
-              } catch (error) {
+              }
+            } catch (error) {
               console.error("[VISITED] Error tracking visit:", error);
             }
 
@@ -2418,7 +2409,7 @@ const app = new Elysia()
     body: t.Object({ name: t.String() }),
     type: "form"
   })
-	.post("/area/updatesettings", async ({ body }) => {
+	.post("/area/updatesettings", async ({ body, cookie }) => {
 		const { 
 			areaId, 
 			description,
@@ -2436,6 +2427,12 @@ const app = new Elysia()
 			return new Response("Missing areaId", { status: 400 });
 		}
 		
+		// Get profile from session cookie
+		const sessionToken = (cookie as any).s?.value as string | undefined;
+		const session = getSessionFromToken(sessionToken);
+		const effectiveProfile = session?.profileName || null;
+		console.log(`[AREA SETTINGS] Request to update ${areaId} by ${effectiveProfile}`);
+		
 		const loadPath = `./data/area/load/${areaId}.json`;
 		const infoPath = `./data/area/info/${areaId}.json`;
 		
@@ -2443,6 +2440,28 @@ const app = new Elysia()
 			const loadFile = createFileHandle(loadPath);
 			if (!await loadFile.exists()) {
 				return new Response("Area not found", { status: 404 });
+			}
+			
+			// Check if the effective profile has permission to update this area
+			if (effectiveProfile) {
+				const profileAccountPath = `./data/person/accounts/${effectiveProfile}.json`;
+				try {
+					const accountData = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
+					const currentUserId = accountData.personId;
+					
+					// Check area info for editor permissions
+					const areaInfoFile = createFileHandle(infoPath);
+					if (await areaInfoFile.exists()) {
+						const areaInfo = await areaInfoFile.json();
+						const hasPermission = areaInfo.editors?.some((editor: any) => editor.id === currentUserId) || false;
+						if (!hasPermission) {
+							console.log(`[AREA SETTINGS] Permission denied: ${effectiveProfile} is not an editor of ${areaId}`);
+							return new Response("Permission denied", { status: 403 });
+						}
+					}
+				} catch (e) {
+					console.warn(`[AREA SETTINGS] Could not verify permissions:`, e);
+				}
 			}
 			
 			const areaData = await loadFile.json();
@@ -2570,7 +2589,7 @@ const app = new Elysia()
 			isExcluded: t.Optional(t.Union([t.String(), t.Boolean()]))
 		}),
 		type: "form"
-	})
+	})	
 	.post("/area/rename", async ({ body, cookie }) => {
 		const { areaId, name } = body as any;
 		
@@ -2741,7 +2760,7 @@ const app = new Elysia()
 		}),
 		type: "form"
 	})
-	.post("/area/seteditor", async ({ body }) => {
+	.post("/area/seteditor", async ({ body, cookie }) => {
 		const { areaId, userId, isEditor } = body as any;
 		const personId = userId; // Client sends userId, we use personId internally
 		
@@ -2751,6 +2770,12 @@ const app = new Elysia()
 				headers: { "Content-Type": "application/json" } 
 			});
 		}
+		
+		// Get profile from session cookie
+		const sessionToken = (cookie as any).s?.value as string | undefined;
+		const session = getSessionFromToken(sessionToken);
+		const effectiveProfile = session?.profileName || null;
+		console.log(`[AREA SETEDITOR] Request to modify editors for ${areaId} by ${effectiveProfile}`);
 		
 		const infoPath = `./data/area/info/${areaId}.json`;
 		
@@ -2765,6 +2790,26 @@ const app = new Elysia()
 			}
 			
 			const infoData = await infoFile.json();
+			
+			// Check if the effective profile is the owner (only owner can modify editors)
+			if (effectiveProfile) {
+				const profileAccountPath = `./data/person/accounts/${effectiveProfile}.json`;
+				try {
+					const accountData = JSON.parse(await fs.readFile(profileAccountPath, "utf-8"));
+					const currentUserId = accountData.personId;
+					
+					const isOwner = infoData.editors?.some((editor: any) => editor.id === currentUserId && editor.isOwner) || false;
+					if (!isOwner) {
+						console.log(`[AREA SETEDITOR] Permission denied: ${effectiveProfile} is not the owner of ${areaId}`);
+						return new Response(JSON.stringify({ ok: false, error: "Only the owner can modify editors" }), { 
+							status: 403, 
+							headers: { "Content-Type": "application/json" } 
+						});
+					}
+				} catch (e) {
+					console.warn(`[AREA SETEDITOR] Could not verify permissions:`, e);
+				}
+			}
 			
 			// Initialize editors array if it doesn't exist
 			if (!infoData.editors) infoData.editors = [];
@@ -3119,7 +3164,7 @@ const app = new Elysia()
       placement: t.String()
     })
   })
-  .post("/placement/duplicate", async ({ body }) => {
+  .post("/placement/duplicate", async ({ body, cookie }) => {
     const { areaId, placements } = body;
 
     const areaFilePath = `./data/area/load/${areaId}.json`;
@@ -3132,10 +3177,21 @@ const app = new Elysia()
 
     if (!Array.isArray(areaData.placements)) areaData.placements = [];
 
+    // Get profile from session cookie
+    const sessionToken = (cookie as any).s?.value as string | undefined;
+    const session = getSessionFromToken(sessionToken);
+    const effectiveProfile = session?.profileName || null;
+
     let personId = "unknown";
     let screenName = "anonymous";
     try {
-      const account = await getAccountDataForCurrentProfile();
+      let account: Record<string, any> | null = null;
+      if (effectiveProfile) {
+        account = await loadAccountData(effectiveProfile);
+      }
+      if (!account) {
+        account = await getAccountDataForCurrentProfile();
+      }
       personId = account.personId || personId;
       screenName = account.screenName || screenName;
     } catch { }
@@ -3291,7 +3347,7 @@ const app = new Elysia()
       // Load base person info
       const file = createFileHandle(path.resolve("./data/person/info/", userId + ".json"));
       let personData: Record<string, any> = {};
-      
+
       if (await file.exists()) {
         personData = await file.json();
       } else {
@@ -3819,9 +3875,9 @@ const app = new Elysia()
       if (!account) {
         account = await getAccountDataForCurrentProfile();
       }
-      creatorId = account.personId || creatorId;
-      creatorName = account.screenName || creatorName;
-    } catch (e) {
+        creatorId = account.personId || creatorId;
+        creatorName = account.screenName || creatorName;
+      } catch (e) {
       console.warn("⚠️ Could not load profile for object metadata.", e);
     }
 
