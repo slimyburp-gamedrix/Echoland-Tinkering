@@ -337,6 +337,74 @@ function getTotalOnlinePlayers(): number {
 setInterval(cleanupStalePresence, 15000);
 // ============ END PLAYER PRESENCE TRACKING ============
 
+const FRIENDS_DIR = "./data/person/friends";
+
+function getFriendsFilePath(personId: string): string {
+  return `${FRIENDS_DIR}/${personId}.json`;
+}
+
+async function loadFriendsData(personId: string): Promise<{ friends: Array<{ id: string; strength?: number; addedAt?: string }> }> {
+  try {
+    const parsed = JSON.parse(await fs.readFile(getFriendsFilePath(personId), "utf-8"));
+    return Array.isArray(parsed?.friends) ? parsed : { friends: [] };
+  } catch {
+    return { friends: [] };
+  }
+}
+
+async function saveFriendsData(personId: string, data: { friends: Array<{ id: string; strength?: number; addedAt?: string }> }): Promise<void> {
+  await mkdirWithPermissions(FRIENDS_DIR);
+  const filePath = getFriendsFilePath(personId);
+  const tempPath = `${filePath}.tmp`;
+  await writeFileWithPermissions(tempPath, JSON.stringify(data, null, 2));
+  await fs.rename(tempPath, filePath);
+}
+
+function isPersonOnline(personId: string): boolean {
+  const presence = playerPresence.get(personId);
+  if (!presence) return false;
+  return (Date.now() - presence.lastPing) < PRESENCE_TIMEOUT_MS;
+}
+
+async function buildFriendListEntry(friendId: string, strength = 1): Promise<Record<string, any>> {
+  let screenName = "Unknown";
+  let statusText = "";
+  let lastActivityOn = new Date().toISOString();
+  try {
+    const info = JSON.parse(await fs.readFile(`./data/person/info/${friendId}.json`, "utf-8"));
+    screenName = info.screenName || info.name || screenName;
+    statusText = info.statusText || "";
+    lastActivityOn = info.lastActivityOn || lastActivityOn;
+  } catch { }
+  return {
+    lastActivityOn,
+    screenName,
+    statusText,
+    id: friendId,
+    isOnline: isPersonOnline(friendId),
+    strength
+  };
+}
+
+async function getFriendsByStrengthResponse(personId: string) {
+  const { friends } = await loadFriendsData(personId);
+  const online: any[] = [];
+  const offline: any[] = [];
+  for (const friend of friends) {
+    const entry = await buildFriendListEntry(friend.id, friend.strength ?? 1);
+    if (entry.isOnline) online.push(entry);
+    else offline.push(entry);
+  }
+  offline.sort((a, b) => (b.strength ?? 0) - (a.strength ?? 0));
+  return { online: { friends: online }, offline: { friends: offline } };
+}
+
+async function isFriendOf(requesterPersonId: string, targetUserId: string): Promise<boolean> {
+  if (!requesterPersonId || !targetUserId || requesterPersonId === targetUserId) return false;
+  const { friends } = await loadFriendsData(requesterPersonId);
+  return friends.some((f) => f.id === targetUserId);
+}
+
 const getDynamicAreaList = async () => {
   const arealistPath = "./data/area/arealist.json";
   try {
@@ -3053,9 +3121,77 @@ const app = new Elysia()
       placementId: t.String()
     })
   })
-  .get("person/friendsbystr",
-    () => canned_friendsbystr
-  )
+  .post("/person/addfriend", async ({ body, cookie }) => {
+    const friendId = (body as any).userId || (body as any).id || (body as any).friendId;
+    if (!friendId || typeof friendId !== "string") {
+      return new Response(JSON.stringify({ ok: false, error: "Missing friend id" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    const sessionToken = (cookie as any).s?.value as string | undefined;
+    const session = getSessionFromToken(sessionToken);
+    if (!session?.personId) {
+      return new Response(JSON.stringify({ ok: false, error: "Not authenticated" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    if (friendId === session.personId) {
+      return new Response(JSON.stringify({ ok: false, error: "Cannot add yourself" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    try {
+      const friendsData = await loadFriendsData(session.personId);
+      if (friendsData.friends.some((f) => f.id === friendId)) {
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+
+      friendsData.friends.push({
+        id: friendId,
+        strength: 1,
+        addedAt: new Date().toISOString()
+      });
+      await saveFriendsData(session.personId, friendsData);
+      console.log(`[ADD FRIEND] ${session.profileName} (${session.personId}) added friend ${friendId}`);
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    } catch (error) {
+      console.error("[ADD FRIEND] Error:", error);
+      return new Response(JSON.stringify({ ok: false, error: "Server error" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  }, {
+    body: t.Object({
+      userId: t.Optional(t.String()),
+      id: t.Optional(t.String()),
+      friendId: t.Optional(t.String())
+    }),
+    type: "form"
+  })
+  .get("person/friendsbystr", async ({ cookie }) => {
+    const sessionToken = (cookie as any).s?.value as string | undefined;
+    const session = getSessionFromToken(sessionToken);
+    if (!session?.personId) return canned_friendsbystr;
+    try {
+      return await getFriendsByStrengthResponse(session.personId);
+    } catch (error) {
+      console.error("[FRIENDS BY STR] Error:", error);
+      return canned_friendsbystr;
+    }
+  })
   .post("/placement/save", async ({ body: { areaId, placementId, data }, cookie }) => {
     if (!areaId || !placementId || !data) {
       console.error("Missing required placement fields");
@@ -3376,7 +3512,7 @@ const app = new Elysia()
     })
   })
   .post("person/info",
-    async ({ body: { areaId, userId } }) => {
+    async ({ body: { areaId, userId }, cookie }) => {
       // Load base person info
       const file = createFileHandle(path.resolve("./data/person/info/", userId + ".json"));
       let personData: Record<string, any> = {};
@@ -3384,16 +3520,23 @@ const app = new Elysia()
       if (await file.exists()) {
         personData = await file.json();
       } else {
-        personData = { 
-          isFriend: false, 
-          isEditorHere: false, 
-          isListEditorHere: false, 
-          isOwnerHere: false, 
-          isAreaLocked: false, 
-          isOnline: false 
+        personData = {
+          isFriend: false,
+          isEditorHere: false,
+          isListEditorHere: false,
+          isOwnerHere: false,
+          isAreaLocked: false,
+          isOnline: false
         };
       }
-      
+
+      const sessionToken = (cookie as any).s?.value as string | undefined;
+      const session = getSessionFromToken(sessionToken);
+      if (session?.personId) {
+        personData.isFriend = await isFriendOf(session.personId, userId);
+        personData.isOnline = isPersonOnline(userId);
+      }
+
       // Add area-specific editor info
       try {
         const areaInfoPath = `./data/area/info/${areaId}.json`;
