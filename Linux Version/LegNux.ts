@@ -3181,6 +3181,51 @@ const app = new Elysia()
     }),
     type: "form"
   })
+  .post("/person/removefriend", async ({ body, cookie }) => {
+    const friendId = (body as any).userId || (body as any).id || (body as any).friendId;
+    if (!friendId || typeof friendId !== "string") {
+      return new Response(JSON.stringify({ ok: false, error: "Missing friend id" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    const sessionToken = (cookie as any).s?.value as string | undefined;
+    const session = getSessionFromToken(sessionToken);
+    if (!session?.personId) {
+      return new Response(JSON.stringify({ ok: false, error: "Not authenticated" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    try {
+      const friendsData = await loadFriendsData(session.personId);
+      const before = friendsData.friends.length;
+      friendsData.friends = friendsData.friends.filter((f) => f.id !== friendId);
+      if (friendsData.friends.length !== before) {
+        await saveFriendsData(session.personId, friendsData);
+        console.log(`[REMOVE FRIEND] ${session.profileName} (${session.personId}) removed friend ${friendId}`);
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    } catch (error) {
+      console.error("[REMOVE FRIEND] Error:", error);
+      return new Response(JSON.stringify({ ok: false, error: "Server error" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  }, {
+    body: t.Object({
+      userId: t.Optional(t.String()),
+      id: t.Optional(t.String()),
+      friendId: t.Optional(t.String())
+    }),
+    type: "form"
+  })
   .get("person/friendsbystr", async ({ cookie }) => {
     const sessionToken = (cookie as any).s?.value as string | undefined;
     const session = getSessionFromToken(sessionToken);
