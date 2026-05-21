@@ -1120,6 +1120,7 @@ const app = new Elysia()
     const html = `<!DOCTYPE html>
 <html>
 <head>
+	<meta charset="UTF-8">
   <title>Echoland Admin</title>
   <style>
     body { font-family: Arial, sans-serif; background: #0f141c; color: #e0e6f0; margin: 0; padding: 30px; }
@@ -1292,7 +1293,7 @@ const app = new Elysia()
   </script>
 </body>
 </html>`;
-    return new Response(html, { headers: { "Content-Type": "text/html" } });
+    return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
   })
   .get("/admin/assign", async ({ query }) => {
     const clientId = query.clientId;
