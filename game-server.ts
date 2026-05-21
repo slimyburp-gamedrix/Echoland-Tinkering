@@ -3029,6 +3029,31 @@ const app = new Elysia()
     }),
     type: "form"
   })
+  .post("/person/getflag", async ({ body }) => {
+    const personId = (body as { id?: string }).id;
+    if (!personId || typeof personId !== "string") {
+      return new Response(JSON.stringify({ ok: false, error: "Missing id" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    let isFlagged = false;
+    try {
+      const info = JSON.parse(await fs.readFile(`./data/person/info/${personId}.json`, "utf-8"));
+      isFlagged = info.isFlagged === true || info.isBanned === true;
+    } catch {
+      // No person info file — not flagged
+    }
+
+    return new Response(JSON.stringify({ isFlagged }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  }, {
+    body: t.Object({ id: t.String() }),
+    type: "form"
+  })
   .get("person/friendsbystr", async ({ cookie }) => {
     const sessionToken = (cookie as any).s?.value as string | undefined;
     const session = getSessionFromToken(sessionToken);
