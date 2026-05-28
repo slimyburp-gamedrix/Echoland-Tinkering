@@ -55,6 +55,14 @@ const sessionsByToken = new Map<string, ClientSession>();
 
 // Register a client session with a token
 function registerSession(sessionToken: string, profileName: string, personId: string, homeAreaId: string): void {
+  // Replace older sessions for the same profile (reconnect / re-auth)
+  for (const [token, existing] of sessionsByToken.entries()) {
+    if (existing.profileName === profileName && token !== sessionToken) {
+      sessionsByToken.delete(token);
+      console.log(`[SESSION] Replaced old session for ${profileName}`);
+    }
+  }
+
   const session: ClientSession = {
     profileName,
     personId,
@@ -65,6 +73,10 @@ function registerSession(sessionToken: string, profileName: string, personId: st
   sessionsByToken.set(sessionToken, session);
   console.log(`[SESSION] Registered session ${sessionToken.substring(0, 12)}... for ${profileName}`);
   notifyActiveChange();
+}
+
+function isSessionActive(session: ClientSession, now = Date.now()): boolean {
+  return (now - session.lastActivity) < SESSION_TIMEOUT_MS;
 }
 
 // Get profile from session token (the cookie value)
@@ -105,13 +117,24 @@ function getAllSessions(): Map<string, ClientSession> {
 }
 
 // COMPATIBILITY: Get most recently active profile (fallback for code without cookie access)
-// Returns currentActiveProfile or first session's profile as fallback
+// Returns currentActiveProfile or most recently active session's profile as fallback
 function getMostRecentlyActiveProfile(): string | null {
-  // First try currentActiveProfile (set at auth time)
-  if (currentActiveProfile) return currentActiveProfile;
-  // Fallback: return first session's profile
-  const firstSession = sessionsByToken.values().next().value;
-  return firstSession?.profileName || null;
+  const now = Date.now();
+  if (currentActiveProfile) {
+    const currentSession = [...sessionsByToken.values()].find(
+      (s) => s.profileName === currentActiveProfile && isSessionActive(s, now)
+    );
+    if (currentSession) return currentActiveProfile;
+  }
+
+  let latest: ClientSession | null = null;
+  for (const session of sessionsByToken.values()) {
+    if (!isSessionActive(session, now)) continue;
+    if (!latest || session.lastActivity > latest.lastActivity) {
+      latest = session;
+    }
+  }
+  return latest?.profileName || null;
 }
 
 // COMPATIBILITY: Get effective profile with area context (for legacy code)
@@ -281,23 +304,69 @@ function cleanupStalePresence(): void {
   }
 }
 
-// Clean up expired sessions (separate from presence timeout)
-function cleanupExpiredSessions(): void {
+// ============ AREA PING / INVITE ============
+const PING_EXPIRY_MS = 120000;
+
+interface PendingAreaPing {
+  fromPersonId: string;
+  fromScreenName: string;
+  areaId: string;
+  areaName: string;
+  createdAt: number;
+}
+
+const pendingPingsByPersonId = new Map<string, PendingAreaPing[]>();
+
+function queuePendingPing(targetPersonId: string, ping: PendingAreaPing): void {
+  const list = pendingPingsByPersonId.get(targetPersonId) ?? [];
+  list.push(ping);
+  pendingPingsByPersonId.set(targetPersonId, list);
+}
+
+function drainPendingPingsForPerson(personId: string): PendingAreaPing[] {
+  const list = pendingPingsByPersonId.get(personId) ?? [];
+  pendingPingsByPersonId.delete(personId);
+  const now = Date.now();
+  return list.filter((p) => now - p.createdAt < PING_EXPIRY_MS);
+}
+
+async function getScreenNameForPerson(personId: string, fallback: string): Promise<string> {
+  try {
+    const info = JSON.parse(await fs.readFile(`./data/person/info/${personId}.json`, "utf-8"));
+    return info.screenName || info.name || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function cleanupStaleSessions(): void {
   const now = Date.now();
   let removed = 0;
   for (const [token, session] of sessionsByToken.entries()) {
-    if ((now - session.lastActivity) >= SESSION_TIMEOUT_MS) {
-      console.log(`[SESSION] ${session.profileName} session expired after ${SESSION_TIMEOUT_MS/1000}s of inactivity`);
+    if (!isSessionActive(session, now)) {
+      console.log(`[SESSION] ${session.profileName} session timed out`);
       sessionsByToken.delete(token);
-      // Also remove from presence tracking
       playerPresence.delete(session.personId);
       removed++;
     }
   }
   if (removed > 0) {
-    console.log(`[SESSION] Cleaned up ${removed} expired sessions, ${sessionsByToken.size} active sessions`);
+    console.log(`[SESSION] Cleaned up ${removed} stale sessions, ${sessionsByToken.size} active`);
     notifyActiveChange();
   }
+}
+
+function getActiveSessionsByProfile(): ClientSession[] {
+  const now = Date.now();
+  const byProfile = new Map<string, ClientSession>();
+  for (const session of sessionsByToken.values()) {
+    if (!isSessionActive(session, now)) continue;
+    const existing = byProfile.get(session.profileName);
+    if (!existing || session.lastActivity > existing.lastActivity) {
+      byProfile.set(session.profileName, session);
+    }
+  }
+  return Array.from(byProfile.values());
 }
 
 // Get total online players
@@ -315,7 +384,7 @@ function getTotalOnlinePlayers(): number {
 // Run presence cleanup every 15 seconds
 setInterval(cleanupStalePresence, 15000);
 // Run session cleanup every 60 seconds
-setInterval(cleanupExpiredSessions, 60000);
+setInterval(cleanupStaleSessions, 60000);
 // ============ END PLAYER PRESENCE TRACKING ============
 
 const FRIENDS_DIR = "./data/person/friends";
@@ -339,6 +408,19 @@ async function saveFriendsData(personId: string, data: { friends: Array<{ id: st
   const tempPath = `${filePath}.tmp`;
   await fs.writeFile(tempPath, JSON.stringify(data, null, 2));
   await fs.rename(tempPath, filePath);
+}
+
+async function incrementFriendStrength(personId: string, friendId: string): Promise<number> {
+  const friendsData = await loadFriendsData(personId);
+  let entry = friendsData.friends.find((f) => f.id === friendId);
+  if (entry) {
+    entry.strength = (entry.strength ?? 1) + 1;
+  } else {
+    entry = { id: friendId, strength: 1, addedAt: new Date().toISOString() };
+    friendsData.friends.push(entry);
+  }
+  await saveFriendsData(personId, friendsData);
+  return entry.strength ?? 1;
 }
 
 function isPersonOnline(personId: string): boolean {
@@ -766,8 +848,18 @@ function getAdminActiveSnapshot() {
     areaName: string;
   }> = [];
 
-  for (const session of sessionsByToken.values()) {
-    sessions.push({
+  const activeSessions = getActiveSessionsByProfile();
+  const loggedIn: Array<{
+    profileName: string;
+    personId: string;
+    currentAreaId: string | null;
+    areaName: string;
+  }> = [];
+
+  const onlineNames = new Set(online.map((o) => o.profileName));
+  for (const session of activeSessions) {
+    if (onlineNames.has(session.profileName)) continue;
+    loggedIn.push({
       profileName: session.profileName,
       personId: session.personId,
       currentAreaId: session.currentAreaId,
@@ -777,9 +869,10 @@ function getAdminActiveSnapshot() {
 
   return {
     online,
-    sessions,
+    sessions: loggedIn,
     totalOnline: online.length,
-    sessionCount: sessions.length
+    sessionCount: loggedIn.length,
+    activeCount: online.length + loggedIn.length
   };
 }
 
@@ -1195,7 +1288,7 @@ const app = new Elysia()
       <span id="active-profile" class="active-badge">${currentActiveProfile ? 'Active: ' + currentActiveProfile : 'No active profile'}</span>
     </div>
     <div class="card">
-      <h2>Live activity <span class="live-count" id="live-count">${active.totalOnline} in-world</span> · <span id="session-count">${active.sessionCount} sessions</span></h2>
+      <h2>Live activity <span class="live-count" id="live-count">${active.totalOnline} in-world</span> · <span id="session-count">${active.activeCount} active</span></h2>
       <div id="active-players-list">
         ${active.online.length
           ? active.online.map((o) => `<div class="live-row"><strong>${escapeHtml(o.profileName)}</strong> <span class="meta">in ${escapeHtml(o.areaName)}</span></div>`).join("")
@@ -1282,7 +1375,7 @@ const app = new Elysia()
             const list = document.getElementById('active-players-list');
             const sessionsList = document.getElementById('active-sessions-list');
             if (liveCount) liveCount.textContent = data.totalOnline + ' in-world';
-            if (sessionCount) sessionCount.textContent = data.sessionCount + ' sessions';
+            if (sessionCount) sessionCount.textContent = data.activeCount + ' active';
             if (list) {
               list.innerHTML = data.online.length
                 ? data.online.map(o => '<div class="live-row"><strong>' + o.profileName + '</strong> <span class="meta">in ' + o.areaName + '</span></div>').join('')
@@ -1306,7 +1399,7 @@ const app = new Elysia()
           const list = document.getElementById('active-players-list');
           const sessionsList = document.getElementById('active-sessions-list');
           if (liveCount) liveCount.textContent = data.totalOnline + ' in-world';
-          if (sessionCount) sessionCount.textContent = data.sessionCount + ' sessions';
+          if (sessionCount) sessionCount.textContent = data.activeCount + ' active';
           if (list) {
             list.innerHTML = data.online.length
               ? data.online.map(o => '<div class="live-row"><strong>' + o.profileName + '</strong> <span class="meta">in ' + o.areaName + '</span></div>').join('')
@@ -1739,13 +1832,35 @@ const app = new Elysia()
     const session = getSessionFromToken(sessionToken);
     
     if (session && areaId) {
+      touchSession(sessionToken);
       // Update player presence
       updatePlayerPresence(session.personId, session.profileName, areaId);
       // Update current area in session
       updateSessionArea(sessionToken, areaId);
+    } else if (sessionToken) {
+      touchSession(sessionToken);
+    }
+
+    const response: Record<string, unknown> = {
+      vMaj: 188,
+      vMinSrv: 1
+    };
+
+    if (session?.personId) {
+      const pings = drainPendingPingsForPerson(session.personId);
+      if (pings.length > 0) {
+        const latest = pings[pings.length - 1];
+        response.pingFromUserId = latest.fromPersonId;
+        response.pingFromUserName = latest.fromScreenName;
+        response.pingAreaId = latest.areaId;
+        response.pingAreaName = latest.areaName;
+        console.log(
+          `[PING DELIVER] ${session.profileName} (${session.personId}) <- ${latest.fromScreenName} invites to "${latest.areaName}" (${latest.areaId})`
+        );
+      }
     }
     
-    return { "vMaj": 188, "vMinSrv": 1 };
+    return response;
   })
   .post(
     "/area/load",
@@ -3371,6 +3486,111 @@ const app = new Elysia()
       console.error("[FRIENDS BY STR] Error:", error);
       return canned_friendsbystr;
     }
+  })
+  .post("/person/ping", async ({ body, cookie }) => {
+    const targetId = (body as any).userId || (body as any).id;
+    const areaId = (body as any).areaId as string | undefined;
+
+    if (!targetId || typeof targetId !== "string") {
+      return new Response(JSON.stringify({ ok: false, error: "Missing target id" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    const sessionToken = (cookie as any).s?.value as string | undefined;
+    const session = getSessionFromToken(sessionToken);
+    if (!session?.personId) {
+      return new Response(JSON.stringify({ ok: false, error: "Not authenticated" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    const inviteAreaId = areaId || session.currentAreaId;
+    if (!inviteAreaId) {
+      return new Response(JSON.stringify({ ok: false, error: "Missing areaId" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    if (targetId === session.personId) {
+      return new Response(JSON.stringify({ ok: false, error: "Cannot ping yourself" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    const fromScreenName = await getScreenNameForPerson(session.personId, session.profileName);
+    const areaName = await resolveAreaNameForPing(inviteAreaId);
+    queuePendingPing(targetId, {
+      fromPersonId: session.personId,
+      fromScreenName,
+      areaId: inviteAreaId,
+      areaName,
+      createdAt: Date.now()
+    });
+    console.log(`[PING] ${fromScreenName} (${session.personId}) pinged ${targetId} to area ${inviteAreaId}`);
+
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  }, {
+    body: t.Object({
+      userId: t.Optional(t.String()),
+      id: t.Optional(t.String()),
+      areaId: t.Optional(t.String())
+    }),
+    type: "form"
+  })
+  .post("/person/incfriendstrength", async ({ body, cookie }) => {
+    const friendId = (body as any).userId || (body as any).id || (body as any).friendId;
+    if (!friendId || typeof friendId !== "string") {
+      return new Response(JSON.stringify({ ok: false, error: "Missing friend id" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    const sessionToken = (cookie as any).s?.value as string | undefined;
+    const session = getSessionFromToken(sessionToken);
+    if (!session?.personId) {
+      return new Response(JSON.stringify({ ok: false, error: "Not authenticated" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    if (friendId === session.personId) {
+      return new Response(JSON.stringify({ ok: false, error: "Invalid friend id" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    try {
+      const strength = await incrementFriendStrength(session.personId, friendId);
+      console.log(`[INC FRIEND STRENGTH] ${session.profileName} (${session.personId}) -> ${friendId} (strength ${strength})`);
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    } catch (error) {
+      console.error("[INC FRIEND STRENGTH] Error:", error);
+      return new Response(JSON.stringify({ ok: false, error: "Server error" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  }, {
+    body: t.Object({
+      userId: t.Optional(t.String()),
+      id: t.Optional(t.String()),
+      friendId: t.Optional(t.String())
+    }),
+    type: "form"
   })
   .post("/placement/save", async ({ body: { areaId, placementId, data } }) => {
     if (!areaId || !placementId || !data) {
