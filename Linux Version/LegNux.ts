@@ -104,6 +104,7 @@ interface ClientSession {
   personId: string;
   homeAreaId: string;
   currentAreaId: string | null;
+  lastActivity: number; // timestamp for session timeout tracking
 }
 
 // Map sessionToken → session (THE primary identifier - from cookie)
@@ -115,11 +116,21 @@ function registerSession(sessionToken: string, profileName: string, personId: st
     profileName,
     personId,
     homeAreaId,
-    currentAreaId: homeAreaId
+    currentAreaId: homeAreaId,
+    lastActivity: Date.now()
   };
   sessionsByToken.set(sessionToken, session);
   console.log(`[SESSION] Registered session ${sessionToken.substring(0, 12)}... for ${profileName}`);
   notifyActiveChange();
+}
+
+// Update session last activity timestamp
+function touchSession(sessionToken: string | undefined): void {
+  if (!sessionToken) return;
+  const session = sessionsByToken.get(sessionToken);
+  if (session) {
+    session.lastActivity = Date.now();
+  }
 }
 
 // Get profile from session token (the cookie value)
@@ -141,6 +152,7 @@ function updateSessionArea(sessionToken: string | undefined, areaId: string): vo
   const session = sessionsByToken.get(sessionToken);
   if (session) {
     session.currentAreaId = areaId;
+    session.lastActivity = Date.now();
   }
 }
 
@@ -171,7 +183,14 @@ function getAccountPathForProfile(profileName: string): string {
 }
 
 // Get account path for the most recently active profile (uses session tracking)
-async function getAccountPath(): Promise<string> {
+async function getAccountPath(sessionToken?: string): Promise<string> {
+  if (sessionToken) {
+    const session = getSessionFromToken(sessionToken);
+    if (session) {
+      return getAccountPathForProfile(session.profileName);
+    }
+  }
+
   const effectiveProfile = getMostRecentlyActiveProfile();
   if (!effectiveProfile) {
     throw new Error("No active session");
@@ -233,6 +252,7 @@ const PORT_CDN_UGCIMAGES = Number(process.env.PORT_CDN_UGCIMAGES ?? 8003);
 // ============ PLAYER PRESENCE TRACKING ============
 // Tracks which players are in which areas with timeout
 const PRESENCE_TIMEOUT_MS = 30000; // 30 seconds without ping = player left
+const SESSION_TIMEOUT_MS = 600000; // 10 minutes without activity = session expired
 
 interface PlayerPresence {
   personId: string;
@@ -324,6 +344,24 @@ function cleanupStalePresence(): void {
   }
 }
 
+// Clean up expired sessions (separate from presence timeout)
+function cleanupExpiredSessions(): void {
+  const now = Date.now();
+  let removed = 0;
+  for (const [token, session] of sessionsByToken.entries()) {
+    if ((now - session.lastActivity) >= SESSION_TIMEOUT_MS) {
+      console.log(`[SESSION] ${session.profileName} session expired after ${SESSION_TIMEOUT_MS/1000}s of inactivity`);
+      sessionsByToken.delete(token);
+      playerPresence.delete(session.personId);
+      removed++;
+    }
+  }
+  if (removed > 0) {
+    console.log(`[SESSION] Cleaned up ${removed} expired sessions, ${sessionsByToken.size} active sessions`);
+    notifyActiveChange();
+  }
+}
+
 // Get total online players
 function getTotalOnlinePlayers(): number {
   const now = Date.now();
@@ -338,6 +376,8 @@ function getTotalOnlinePlayers(): number {
 
 // Run cleanup every 15 seconds
 setInterval(cleanupStalePresence, 15000);
+// Run session cleanup every 60 seconds
+setInterval(cleanupExpiredSessions, 60000);
 // ============ END PLAYER PRESENCE TRACKING ============
 
 const FRIENDS_DIR = "./data/person/friends";
@@ -1710,12 +1750,13 @@ const app = new Elysia()
       }))
     }
   )
-  .post("/person/updateattachment", async ({ body }) => {
+  .post("/person/updateattachment", async ({ body, cookie }) => {
     return await accountMutex.runExclusive(async () => {
       console.log("[ATTACHMENT] Received request:", JSON.stringify(body));
       const { id, data, attachments } = body as any;
+      const sessionToken = (cookie as any).s?.value as string | undefined;
 
-      const accountPath = await getAccountPath();
+      const accountPath = await getAccountPath(sessionToken);
       let accountData: Record<string, any> = {};
       
       // Read account data
@@ -1814,10 +1855,11 @@ const app = new Elysia()
     });
   })
   // Set hand color for avatar
-  .post("/person/sethandcolor", async ({ body }) => {
+  .post("/person/sethandcolor", async ({ body, cookie }) => {
     console.log("[HAND COLOR] Received request:", body);
+    const sessionToken = (cookie as any).s?.value as string | undefined;
 
-    const accountPath = await getAccountPath();
+    const accountPath = await getAccountPath(sessionToken);
     let accountData: Record<string, any> = {};
     try {
       accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
@@ -1866,6 +1908,8 @@ const app = new Elysia()
       updatePlayerPresence(session.personId, session.profileName, areaId);
       // Update current area in session
       updateSessionArea(sessionToken, areaId);
+      // Keep the session active while the player is pinging
+      touchSession(sessionToken);
     }
     
     return { "vMaj": 188, "vMinSrv": 1 };
@@ -1892,6 +1936,7 @@ const app = new Elysia()
 
             // Update session's current area
             updateSessionArea(sessionToken, areaId);
+            touchSession(sessionToken);
 
             // Track this area visit for the REQUESTER
             if (requesterProfile) {
@@ -2359,8 +2404,9 @@ const app = new Elysia()
     },
     { body: t.Object({ term: t.String(), byCreatorId: t.Optional(t.String()), byCreatorName: t.Optional(t.String()) }) }
   )
-  .post("/user/setName", async ({ body }) => {
+  .post("/user/setName", async ({ body, cookie }) => {
     const { newName } = body;
+    const sessionToken = (cookie as any).s?.value as string | undefined;
 
     if (!newName || typeof newName !== "string" || newName.length < 3) {
       return new Response(JSON.stringify({ ok: false, error: "Invalid name" }), {
@@ -2369,7 +2415,7 @@ const app = new Elysia()
       });
     }
 
-    const accountPath = await getAccountPath();
+    const accountPath = await getAccountPath(sessionToken);
     let accountData: Record<string, any> = {};
     try {
       accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
@@ -2698,7 +2744,7 @@ const app = new Elysia()
     await writeFileWithPermissions(listPath, JSON.stringify(areaList, null, 2));
 
     // ✅ Inject area into account.json under ownedAreas
-    const accountPath = await getAccountPath();
+    const accountPath = await getAccountPath(sessionToken);
     try {
       const accountFile = createFileHandle(accountPath);
       let accountData = await accountFile.json();
@@ -3987,11 +4033,12 @@ const app = new Elysia()
       isFindable: t.Optional(t.Boolean())
     })
   })
-  .get("/inventory/:page", async ({ params }) => {
+  .get("/inventory/:page", async ({ params, cookie }) => {
     const pageParam = params?.page;
     const page = Math.max(0, parseInt(String(pageParam), 10) || 0);
+    const sessionToken = (cookie as any).s?.value as string | undefined;
 
-    const accountPath = await getAccountPath();
+    const accountPath = await getAccountPath(sessionToken);
     let account: Record<string, any> = {};
     try {
       account = JSON.parse(await fs.readFile(accountPath, "utf-8"));
@@ -4033,14 +4080,15 @@ const app = new Elysia()
       headers: { "Content-Type": "application/json" }
     });
   })
-  .post("/inventory/save", async ({ body }) => {
+  .post("/inventory/save", async ({ body, cookie }) => {
     // Accept one of:
     // - { ids: [...] }
     // - { id: "..." }
     // - { page: number|string, inventoryItem: string }  // from client logs
     const invUpdate = body as any;
+    const sessionToken = (cookie as any).s?.value as string | undefined;
 
-    const accountPath = await getAccountPath();
+    const accountPath = await getAccountPath(sessionToken);
     let accountData: Record<string, any> = {};
     try {
       accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
@@ -4096,9 +4144,10 @@ const app = new Elysia()
     body: t.Unknown(),
     type: "form"
   })
-  .post("/inventory/delete", async ({ body }) => {
+  .post("/inventory/delete", async ({ body, cookie }) => {
     // Delete item from inventory: { page: number|string, thingId: string }
     const { page, thingId } = body as any;
+    const sessionToken = (cookie as any).s?.value as string | undefined;
 
     if (page === undefined || thingId === undefined) {
       return new Response(JSON.stringify({ ok: false, error: "Missing page or thingId" }), {
@@ -4107,7 +4156,7 @@ const app = new Elysia()
       });
     }
 
-    const accountPath = await getAccountPath();
+    const accountPath = await getAccountPath(sessionToken);
     let accountData: Record<string, any> = {};
     try {
       accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
@@ -4175,7 +4224,7 @@ const app = new Elysia()
       });
     }
 
-    const accountPath = await getAccountPath();
+    const accountPath = await getAccountPath(sessionToken);
     let accountData: Record<string, any> = {};
     try {
       accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
@@ -4229,11 +4278,12 @@ const app = new Elysia()
     }),
     type: "form"
   })
-  .post("/inventory/update", async ({ body }) => {
+  .post("/inventory/update", async ({ body, cookie }) => {
     // Mirror /inventory/save behavior; some clients call update
     const invUpdate = body as any;
+    const sessionToken = (cookie as any).s?.value as string | undefined;
 
-    const accountPath = await getAccountPath();
+    const accountPath = await getAccountPath(sessionToken);
     let accountData: Record<string, any> = {};
     try {
       accountData = JSON.parse(await fs.readFile(accountPath, "utf-8"));
