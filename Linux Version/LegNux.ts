@@ -1069,6 +1069,17 @@ if (areaIndex.length === 0) {
   await writeFileWithPermissions("./cache/areaIndex.json", JSON.stringify(areaIndex));
 }
 
+const normalizeAreaName = (name: string): string => {
+  return name.replace(/[^-_a-z0-9]/gi, "").toLowerCase();
+}
+
+const isAreaNameTaken = (areaName: string, ignoreAreaId?: string): boolean => {
+  const normalized = normalizeAreaName(areaName);
+  if (!normalized) return false;
+  const existingAreaId = areaByUrlName.get(normalized);
+  return !!existingAreaId && existingAreaId !== ignoreAreaId;
+}
+
 const searchArea = (term: string) => {
   return areaIndex.filter(a => a.name.includes(term))
 }
@@ -2318,25 +2329,40 @@ const app = new Elysia()
     }
   })
   .post("/area/save",
-    async ({ body }) => {
-      const areaId = body.id || generateObjectId();
+    async ({ body }: { body: any }) => {
+      const payload = body as any;
+      const areaId = payload.id || generateObjectId();
       const filePath = `./data/area/load/${areaId}.json`;
+
+      let existingAreaData: Record<string, any> = {};
+      try {
+        existingAreaData = JSON.parse(await fs.readFile(filePath, "utf-8"));
+      } catch {
+        // New area or unreadable file: proceed with sanitized body as base.
+      }
+
+      const desiredAreaName = payload.name || payload.areaName || existingAreaData.areaName || "Unnamed Area";
+      if (isAreaNameTaken(desiredAreaName, areaId)) {
+        return new Response(JSON.stringify({ ok: false, error: "An area with this name already exists" }), {
+          status: 409,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
 
       await mkdirWithPermissions("./data/area/load");
       // Align creator identity with account.json (same as /area route)
-      let creatorId = body.creatorId;
+      let creatorId = payload.creatorId;
       try {
         const account = await getAccountDataForCurrentProfile();
         if (account?.personId) creatorId = account.personId;
       } catch { }
       const sanitizedBody = {
-        ...body,
-        areaName: body.name || body.areaName || "Unnamed Area",
+        ...payload,
+        areaName: desiredAreaName,
         creatorId
       };
       // Never replace an existing area load file with a potentially partial payload.
       // Merge incoming data into the current file so required metadata survives.
-      let existingAreaData: Record<string, any> = {};
       try {
         existingAreaData = JSON.parse(await fs.readFile(filePath, "utf-8"));
       } catch {
@@ -2369,7 +2395,7 @@ const app = new Elysia()
           // Add the new area to the user's areas list
           const newArea = {
             id: areaId,
-            name: body.name || "Unnamed Area",
+            name: desiredAreaName,
             playerCount: 0,
             isPrivate: false
           };
@@ -2379,20 +2405,34 @@ const app = new Elysia()
           if (!exists) {
             areasearchData.areas.push(newArea);
             await writeFileWithPermissions(areasearchPath, JSON.stringify(areasearchData, null, 2));
-            console.log(`[AREASEARCH] Added area ${areaId} (${body.name}) to user's created areas list`);
+            console.log(`[AREASEARCH] Added area ${areaId} (${desiredAreaName}) to user's created areas list`);
           }
         }
       } catch (error) {
         console.warn("Could not update user's areasearch file:", error);
       }
 
-      areaIndex.push({
-        name: body.name,
-        description: body.description || "",
-        id: areaId,
-        playerCount: 0
-      });
-      areaByUrlName.set(body.name.replace(/[^-_a-z0-9]/gi, "").toLowerCase(), areaId);
+      const existingIndexEntry = areaIndex.find((a: any) => a.id === areaId);
+      if (existingIndexEntry) {
+        existingIndexEntry.name = desiredAreaName;
+        existingIndexEntry.description = payload.description || existingIndexEntry.description || "";
+      } else {
+        areaIndex.push({
+          name: desiredAreaName,
+          description: payload.description || "",
+          id: areaId,
+          playerCount: 0
+        });
+      }
+
+      const normalizedUrlName = normalizeAreaName(desiredAreaName);
+      if (existingAreaData.areaName) {
+        const previousUrlName = normalizeAreaName(existingAreaData.areaName);
+        if (previousUrlName && previousUrlName !== normalizedUrlName) {
+          areaByUrlName.delete(previousUrlName);
+        }
+      }
+      areaByUrlName.set(normalizedUrlName, areaId);
       await mkdirWithPermissions("./cache");
       await writeFileWithPermissions("./cache/areaIndex.json", JSON.stringify(areaIndex));
 
@@ -2630,6 +2670,63 @@ const app = new Elysia()
       totalSearchablePublicAreas: canned_areaList.totalSearchablePublicAreas + dynamic.totalSearchablePublicAreas
     };
   })
+  .post("/area/sethome", async ({ body, cookie }) => {
+    const { areaId } = body as any;
+    if (!areaId || typeof areaId !== "string") {
+      return new Response(JSON.stringify({ ok: false, error: "Missing areaId" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    const sessionToken = (cookie as any).s?.value as string | undefined;
+    const session = getSessionFromToken(sessionToken);
+    if (!session) {
+      return new Response(JSON.stringify({ ok: false, error: "Not authenticated" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    const account = await loadAccountData(session.profileName);
+    if (!account) {
+      return new Response(JSON.stringify({ ok: false, error: "Account not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    const ownedAreas = account.ownedAreas || [];
+    if (areaId !== account.homeAreaId && !ownedAreas.includes(areaId)) {
+      return new Response(JSON.stringify({ ok: false, error: "You can only set home to an area you own" }), {
+        status: 403,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    const loadFile = createFileHandle(`./data/area/load/${areaId}.json`);
+    if (!(await loadFile.exists())) {
+      return new Response(JSON.stringify({ ok: false, error: "Area not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    account.homeAreaId = areaId;
+    if (!ownedAreas.includes(areaId)) {
+      account.ownedAreas = [...ownedAreas, areaId];
+    }
+
+    const accountPath = await getAccountPath(sessionToken);
+    await writeFileWithPermissions(accountPath, JSON.stringify(account, null, 2));
+
+    return new Response(JSON.stringify({ ok: true, homeAreaId: areaId }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  }, {
+    body: t.Object({ areaId: t.String() })
+  })
   .get("/repair-home-area", async () => {
     const areaBase = "./data/area";
 
@@ -2683,6 +2780,13 @@ const app = new Elysia()
     const areaName = body?.name;
     if (!areaName || typeof areaName !== "string") {
       return new Response("Missing area name", { status: 400 });
+    }
+
+    if (isAreaNameTaken(areaName)) {
+      return new Response(JSON.stringify({ ok: false, error: "An area with this name already exists" }), {
+        status: 409,
+        headers: { "Content-Type": "application/json" }
+      });
     }
 
     // Get profile from session cookie
@@ -3798,6 +3902,113 @@ const app = new Elysia()
       areaId: t.String(),
       placementId: t.String(),
       data: t.Unknown()
+    })
+  })
+  .post("/placement/copyall", async ({ body, cookie }) => {
+    const { fromAreaId, toAreaId } = body as any;
+    if (!fromAreaId || !toAreaId || typeof fromAreaId !== "string" || typeof toAreaId !== "string") {
+      return new Response(JSON.stringify({ ok: false, error: "Missing source or target area id" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    if (fromAreaId === toAreaId) {
+      return new Response(JSON.stringify({ ok: false, error: "Source and target area cannot be the same" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    const sessionToken = (cookie as any).s?.value as string | undefined;
+    const session = getSessionFromToken(sessionToken);
+    if (!session) {
+      return new Response(JSON.stringify({ ok: false, error: "Not authenticated" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    const account = await loadAccountData(session.profileName);
+    if (!account) {
+      return new Response(JSON.stringify({ ok: false, error: "Account not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    const ownedAreas = account.ownedAreas || [];
+    if (toAreaId !== account.homeAreaId && !ownedAreas.includes(toAreaId)) {
+      return new Response(JSON.stringify({ ok: false, error: "Not allowed to modify target area" }), {
+        status: 403,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    const sourcePath = `./data/area/load/${fromAreaId}.json`;
+    const targetPath = `./data/area/load/${toAreaId}.json`;
+    let sourceAreaData: Record<string, any>;
+    let targetAreaData: Record<string, any>;
+
+    try {
+      sourceAreaData = JSON.parse(await fs.readFile(sourcePath, "utf-8"));
+    } catch (error) {
+      return new Response(JSON.stringify({ ok: false, error: "Source area not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    try {
+      targetAreaData = JSON.parse(await fs.readFile(targetPath, "utf-8"));
+    } catch (error) {
+      return new Response(JSON.stringify({ ok: false, error: "Target area not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    const sourcePlacements = Array.isArray(sourceAreaData.placements) ? sourceAreaData.placements : [];
+    const targetPlacements = Array.isArray(targetAreaData.placements) ? targetAreaData.placements : [];
+    const existingIds = new Set(targetPlacements.map((p: any) => p.Id));
+    const targetDir = path.resolve("./data/placement/info/", toAreaId);
+    await mkdirWithPermissions(targetDir);
+
+    let count = 0;
+    for (const placement of sourcePlacements) {
+      if (!placement || !placement.Id) continue;
+      let placementId = placement.Id;
+      if (existingIds.has(placementId)) {
+        placementId = `${placementId}-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
+      }
+
+      const copiedPlacement = {
+        ...placement,
+        Id: placementId,
+        placerId: account.personId || "unknown",
+        placerName: account.screenName || "anonymous"
+      };
+
+      const placementPath = path.join(targetDir, placementId + ".json");
+      await writeFileWithPermissions(placementPath, JSON.stringify(copiedPlacement, null, 2));
+
+      if (!existingIds.has(placementId)) {
+        targetPlacements.push(copiedPlacement);
+        existingIds.add(placementId);
+      }
+      count++;
+    }
+
+    targetAreaData.placements = targetPlacements;
+    await writeFileWithPermissions(targetPath, JSON.stringify(targetAreaData, null, 2));
+
+    return new Response(JSON.stringify({ ok: true, copied: count }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  }, {
+    body: t.Object({
+      fromAreaId: t.String(),
+      toAreaId: t.String()
     })
   })
   .post("/placement/delete", async ({ body: { areaId, placementId } }) => {
