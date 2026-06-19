@@ -3143,6 +3143,14 @@ const app = new Elysia()
 			} catch (arealistError) {
 				console.warn(`[AREA RENAME] Could not update arealist.json:`, arealistError);
 			}
+
+			try {
+				await fs.mkdir("./cache", { recursive: true });
+				await Bun.write("./cache/areaIndex.json", JSON.stringify(areaIndex, null, 2));
+				console.log("[AREA RENAME] Updated cache/areaIndex.json");
+			} catch (cacheError) {
+				console.warn("[AREA RENAME] Could not persist area index cache:", cacheError);
+			}
 			
 			console.log(`[AREA RENAME] Renamed area ${areaId} from "${oldName}" to "${trimmedName}"`);
 			
@@ -3726,7 +3734,9 @@ const app = new Elysia()
     })
   })
   .post("/placement/copyall", async ({ body, cookie }) => {
-    const { fromAreaId, toAreaId } = body as any;
+    const requestBody = body as any;
+    const fromAreaId = requestBody.fromAreaId || requestBody.sourceAreaId;
+    const toAreaId = requestBody.toAreaId || requestBody.destinationAreaId;
     if (!fromAreaId || !toAreaId || typeof fromAreaId !== "string" || typeof toAreaId !== "string") {
       return new Response(JSON.stringify({ ok: false, error: "Missing source or target area id" }), {
         status: 400,
@@ -3829,8 +3839,10 @@ const app = new Elysia()
     });
   }, {
     body: t.Object({
-      fromAreaId: t.String(),
-      toAreaId: t.String()
+      fromAreaId: t.Optional(t.String()),
+      sourceAreaId: t.Optional(t.String()),
+      toAreaId: t.Optional(t.String()),
+      destinationAreaId: t.Optional(t.String())
     })
   })
   .post("/placement/delete", async ({ body: { areaId, placementId } }) => {
