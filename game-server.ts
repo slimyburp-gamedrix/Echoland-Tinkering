@@ -2148,7 +2148,7 @@ const app = new Elysia()
         return new Response(JSON.stringify({ ok: false, error: "An area with this name already exists" }), {
           status: 409,
           statusText: "An area with this name already exists",
-          headers: { "Content-Type": "application/json" }
+          headers: { "Content-Type": "application/json", "X-Error-Message": "An area with this name already exists" }
         });
       }
 
@@ -2593,7 +2593,7 @@ const app = new Elysia()
       return new Response(JSON.stringify({ ok: false, error: "An area with this name already exists" }), {
         status: 409,
         statusText: "An area with this name already exists",
-        headers: { "Content-Type": "application/json" }
+        headers: { "Content-Type": "application/json", "X-Error-Message": "An area with this name already exists" }
       });
     }
 
@@ -3045,7 +3045,7 @@ const app = new Elysia()
         return new Response(JSON.stringify({ ok: false, error: "An area with this name already exists" }), { 
           status: 409, 
           statusText: "An area with this name already exists",
-          headers: { "Content-Type": "application/json" } 
+          headers: { "Content-Type": "application/json", "X-Error-Message": "An area with this name already exists" } 
         });
       }
 			
