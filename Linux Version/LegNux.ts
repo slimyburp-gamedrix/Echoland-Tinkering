@@ -2345,6 +2345,7 @@ const app = new Elysia()
       if (isAreaNameTaken(desiredAreaName, areaId)) {
         return new Response(JSON.stringify({ ok: false, error: "An area with this name already exists" }), {
           status: 409,
+          statusText: "An area with this name already exists",
           headers: { "Content-Type": "application/json" }
         });
       }
@@ -2785,6 +2786,7 @@ const app = new Elysia()
     if (isAreaNameTaken(areaName)) {
       return new Response(JSON.stringify({ ok: false, error: "An area with this name already exists" }), {
         status: 409,
+        statusText: "An area with this name already exists",
         headers: { "Content-Type": "application/json" }
       });
     }
@@ -3216,13 +3218,14 @@ const app = new Elysia()
 			// Check for duplicate area names (case-insensitive)
 			const newUrlName = trimmedName.replace(/[^-_a-z0-9]/gi, "").toLowerCase();
 			const existingAreaId = areaByUrlName.get(newUrlName);
-			if (existingAreaId && existingAreaId !== areaId) {
-				console.log(`[AREA RENAME] Duplicate name rejected: "${trimmedName}" already exists as area ${existingAreaId}`);
-				return new Response(JSON.stringify({ ok: false, error: "An area with this name already exists" }), { 
-					status: 409, 
-					headers: { "Content-Type": "application/json" } 
-				});
-			}
+      if (existingAreaId && existingAreaId !== areaId) {
+        console.log(`[AREA RENAME] Duplicate name rejected: "${trimmedName}" already exists as area ${existingAreaId}`);
+        return new Response(JSON.stringify({ ok: false, error: "An area with this name already exists" }), { 
+          status: 409, 
+          statusText: "An area with this name already exists",
+          headers: { "Content-Type": "application/json" } 
+        });
+      }
 			
 			// Update load file
 			const areaData = await loadFile.json();
