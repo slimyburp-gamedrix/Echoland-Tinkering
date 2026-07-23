@@ -1015,6 +1015,26 @@ const areaIndex: { name: string, description?: string, id: string, playerCount: 
 const areaByUrlName = new Map<string, string>()
 const areaSelectionStats = new Map<string, { totalVisitors: number; placementsCount: number }>();
 
+const AREA_STATS_CACHE = "./cache/areaSelectionStats.json";
+const fs = require("fs");
+const fsp = fs.promises;
+
+async function loadAreaStatsCache() {
+  try {
+    const raw = await fsp.readFile(AREA_STATS_CACHE, "utf8");
+    const cached = JSON.parse(raw);
+
+    for (const [areaId, stats] of Object.entries(cached)) {
+      areaSelectionStats.set(areaId, stats as { totalVisitors: number; placementsCount: number });
+    }
+
+    console.log(`✓ Loaded ${areaSelectionStats.size} area stats from cache`);
+  } catch {
+    console.log("Area stats cache missing or invalid, skipping load");
+  }
+}
+
+
 async function readAreaSelectionStats(areaId: string) {
   const cached = areaSelectionStats.get(areaId);
   if (cached) return cached;
@@ -1023,25 +1043,31 @@ async function readAreaSelectionStats(areaId: string) {
   let placementsCount = 0;
 
   try {
-    const infoFile = createFileHandle(`./data/area/info/${areaId}.json`);
-    if (await infoFile.exists()) {
-      const info = await infoFile.json();
-      totalVisitors = typeof info.totalVisitors === "number" ? info.totalVisitors : 0;
-    }
+    const infoPath = `./data/area/info/${areaId}.json`;
+    const infoRaw = await fsp.readFile(infoPath, "utf8");
+    const info = JSON.parse(infoRaw);
+    totalVisitors = typeof info.totalVisitors === "number" ? info.totalVisitors : 0;
   } catch {}
 
   try {
-    const loadFile = createFileHandle(`./data/area/load/${areaId}.json`);
-    if (await loadFile.exists()) {
-      const loadData = await loadFile.json();
-      placementsCount = Array.isArray(loadData?.placements) ? loadData.placements.length : 0;
-    }
+    const loadPath = `./data/area/load/${areaId}.json`;
+    const loadRaw = await fsp.readFile(loadPath, "utf8");
+    const loadData = JSON.parse(loadRaw);
+    placementsCount = Array.isArray(loadData?.placements) ? loadData.placements.length : 0;
   } catch {}
 
   const stats = { totalVisitors, placementsCount };
   areaSelectionStats.set(areaId, stats);
+
+  await fsp.mkdir("./cache", { recursive: true });
+  await fsp.writeFile(
+    AREA_STATS_CACHE,
+    JSON.stringify(Object.fromEntries(areaSelectionStats))
+  );
+
   return stats;
 }
+
 
 console.log("building area index...")
 const cacheFile = createFileHandle("./cache/areaIndex.json");
@@ -1127,7 +1153,56 @@ if (areaIndex.length === 0) {
   await writeFileWithPermissions("./cache/areaIndex.json", JSON.stringify(areaIndex));
 }
 
-await Promise.all(areaIndex.map((entry) => readAreaSelectionStats(entry.id)));
+await loadAreaStatsCache();
+
+
+// First-run preload: build stats cache if missing
+try {
+  await fsp.access(AREA_STATS_CACHE);
+  console.log("Area stats cache exists, skipping preload");
+} catch {
+  console.log("Building initial area stats cache...");
+
+  const statsObj: Record<string, { totalVisitors: number; placementsCount: number }> = {};
+  const total = areaIndex.length;
+
+  for (let i = 0; i < total; i++) {
+    const entry = areaIndex[i];
+    const areaId = entry.id;
+
+    if (i % 1000 === 0) {
+      const percent = ((i / total) * 100).toFixed(1);
+      console.log(`Area stats preload: ${i}/${total} (${percent}%)`);
+    }
+
+    let totalVisitors = 0;
+    let placementsCount = 0;
+
+    try {
+      const infoPath = `./data/area/info/${areaId}.json`;
+      const infoRaw = await fsp.readFile(infoPath, "utf8");
+      const info = JSON.parse(infoRaw);
+      totalVisitors = typeof info.totalVisitors === "number" ? info.totalVisitors : 0;
+    } catch {}
+
+    try {
+      const loadPath = `./data/area/load/${areaId}.json`;
+      const loadRaw = await fsp.readFile(loadPath, "utf8");
+      const loadData = JSON.parse(loadRaw);
+      placementsCount = Array.isArray(loadData?.placements) ? loadData.placements.length : 0;
+    } catch {}
+
+    statsObj[areaId] = { totalVisitors, placementsCount };
+  }
+
+  await fsp.mkdir("./cache", { recursive: true });
+  await fsp.writeFile(AREA_STATS_CACHE, JSON.stringify(statsObj));
+
+  console.log(`✓ Initial area stats cache created (${total} areas)`);
+}
+
+await loadAreaStatsCache();
+
 
 const normalizeAreaName = (name: string): string => {
   return name.replace(/[^-_a-z0-9]/gi, "").toLowerCase();
