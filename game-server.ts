@@ -4100,6 +4100,99 @@ const app = new Elysia()
       placementId: t.String()
     })
   })
+  .post("/placement/deleteall", async ({ body: { areaId } }) => {
+    const placementDir = `./data/placement/info/${areaId}`;
+
+    // Delete all placement files
+    try {
+      const files = await fs.readdir(placementDir);
+      for (const file of files) {
+        if (file.endsWith(".json")) {
+          await fs.rm(path.join(placementDir, file));
+        }
+      }
+    } catch { }
+
+    // Update area load file with ground placement
+    const areaFilePath = `./data/area/load/${areaId}.json`;
+    try {
+      const areaData = JSON.parse(await fs.readFile(areaFilePath, "utf-8"));
+      const groundPlacement = {
+        Id: crypto.randomUUID().replace(/-/g, "").slice(0, 24),
+        Tid: "000000000000000000000001",
+        P: { x: 0, y: -0.3, z: 0 },
+        R: { x: 0, y: 0, z: 0 }
+      };
+      areaData.placements = [groundPlacement];
+      await fs.writeFile(areaFilePath, JSON.stringify(areaData, null, 2));
+      await fs.writeFile(path.join(placementDir, `${groundPlacement.Id}.json`), JSON.stringify(groundPlacement, null, 2));
+    } catch (error) {
+      console.error(`[PLACEMENT DELETEALL] Failed to update area load file for ${areaId}:`, error);
+      return new Response(JSON.stringify({ ok: false, error: "Failed to update area data" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  }, {
+    body: t.Object({
+      areaId: t.String()
+    })
+  })
+  .post("/placement/replacething", async ({ body: { areaId, originalThingId, newThingId } }) => {
+    const placementDir = `./data/placement/info/${areaId}`;
+    const areaFilePath = `./data/area/load/${areaId}.json`;
+
+    // Read all placement files and replace Tid
+    try {
+      const files = await fs.readdir(placementDir);
+      for (const file of files) {
+        if (!file.endsWith(".json")) continue;
+        const filePath = path.join(placementDir, file);
+        try {
+          const placement = JSON.parse(await fs.readFile(filePath, "utf-8"));
+          if (placement.Tid === originalThingId) {
+            placement.Tid = newThingId;
+            await fs.writeFile(filePath, JSON.stringify(placement, null, 2));
+          }
+        } catch { }
+      }
+    } catch { }
+
+    // Update area load file placements
+    try {
+      const areaData = JSON.parse(await fs.readFile(areaFilePath, "utf-8"));
+      if (Array.isArray(areaData.placements)) {
+        for (const p of areaData.placements) {
+          if (p.Tid === originalThingId) {
+            p.Tid = newThingId;
+          }
+        }
+      }
+      await fs.writeFile(areaFilePath, JSON.stringify(areaData, null, 2));
+    } catch (error) {
+      console.error(`[PLACEMENT REPLACETHING] Failed to update area load file for ${areaId}:`, error);
+      return new Response(JSON.stringify({ ok: false, error: "Failed to update area data" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  }, {
+    body: t.Object({
+      areaId: t.String(),
+      originalThingId: t.String(),
+      newThingId: t.String()
+    })
+  })
   .post("/placement/update", async ({ body, cookie }) => {
     const { areaId, placement } = body;
     const parsed = JSON.parse(decodeURIComponent(placement));
@@ -5531,14 +5624,11 @@ const areaFolder = "./data/area/info/";
 let debounceTimer;
 
 watch(areaFolder, { recursive: true }, (eventType, filename) => {
-  // Only log if it's a relevant change (not just access events)
-  if (eventType === 'change' && filename && filename.endsWith('.json')) {
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(async () => {
       console.log("[Area Watcher] Rebuilding area index due to file changes...");
       await rebuildAreaIndex();
   }, 1000); // Wait 1 second after last change
-  }
 });
 
 import { readdir, readFile } from "fs/promises";
